@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ecomodico · Demo del chat</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root { --azul: #2274A5; --fondo: #FAFAFA; --borde: #E0E0E0; --texto: #222; --texto-2: #666; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: 'Outfit', system-ui, sans-serif; background: var(--fondo); color: var(--texto); line-height: 1.5; }
+  header { background: var(--azul); color: #fff; position: sticky; top: 0; }
+  .nav { max-width: 960px; margin: 0 auto; padding: 12px 16px; display: flex; align-items: center; gap: 16px; }
+  .nav img { height: 30px; }
+  .nav input { flex: 1; border: 0; border-radius: 30px; padding: 10px 16px; font: inherit; font-size: 14px; }
+  .aviso { background: #FDB916; color: #222; text-align: center; font-size: 13px; font-weight: 600; padding: 6px 16px; letter-spacing: .04em; }
+  main { max-width: 960px; margin: 0 auto; padding: 32px 16px; }
+  h1 { font-size: 28px; font-weight: 700; margin: 0 0 8px; }
+  p { color: var(--texto-2); margin: 0 0 24px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 16px; }
+  .cat { background: #fff; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,.08); padding: 24px 16px; font-weight: 600; text-align: center; }
+  .nota { margin-top: 32px; background: #fff; border: 1px solid var(--borde); border-radius: 8px; padding: 16px; font-size: 14px; color: var(--texto-2); }
+  code { background: #EBF4FB; padding: 2px 6px; border-radius: 4px; color: var(--azul); }
+</style>
+</head>
+<body>
+<div class="aviso">🚚 ENVÍOS GRATIS A PARTIR DE $75.000 EN PRODUCTOS SELECCIONADOS A CABA &amp; AMBA</div>
+<header><div class="nav">
+  <img alt="Ecomodico" src="https://d2eebw31vcx88p.cloudfront.net/ecomodico/uploads-r/configs/22d42d8543bd3e9e7b75ef68339ff01c8239ea71.png">
+  <input placeholder="¿Qué estás buscando?" disabled>
+</div></header>
+<main>
+  <h1>Tu market online, del celu a tu casa</h1>
+  <p>Página de prueba que simula la tienda. El chat está abajo a la derecha.</p>
+  <div class="grid">
+    <div class="cat">🛒 Supermercado</div><div class="cat">👶 Bebés y niños</div>
+    <div class="cat">📺 Electro y hogar</div><div class="cat">💪 Suplementos</div>
+  </div>
+  <div class="nota">
+    Para meter el chat en cualquier página basta con una línea:<br><br>
+    <code>&lt;script src="http://localhost:8787/widget.js" defer&gt;&lt;/script&gt;</code>
+  </div>
+</main>
+<script src="/widget.js" defer></script>
+</body>
+</html>

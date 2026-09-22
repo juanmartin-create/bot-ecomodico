@@ -1,0 +1,6 @@
+venv/
+.env
+__pycache__/
+uso.jsonl
+server.log
+server_*.log
