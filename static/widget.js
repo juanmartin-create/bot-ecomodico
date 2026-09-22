@@ -81,7 +81,11 @@
   .card .stock { font-size: 11px; color: var(--verde); }
   .card .stock.poco { color: var(--naranja); }
   .card .stock.no { color: #999; }
-  .card .cta { margin-top: auto; text-align: center; background: var(--azul); color: #fff; font-size: 13px; font-weight: 600; padding: 8px; border-radius: 30px; }
+  .card a { color: inherit; text-decoration: none; }
+  .card .cta { display: block; width: 100%; margin-top: auto; text-align: center; background: var(--azul); color: #fff; font-size: 13px; font-weight: 600; padding: 8px; border: 0; border-radius: 30px; cursor: pointer; }
+  .card .cta:disabled { opacity: .4; cursor: not-allowed; }
+  .card .cta.sec { background: #fff; color: var(--azul); border: 2px solid var(--azul); }
+  .card .info > a:last-child { margin-top: auto; }
   .chips { display: flex; flex-wrap: wrap; gap: 8px; }
   .chip { background: #fff; border: 2px solid var(--azul); color: var(--azul); font-size: 13px; font-weight: 500; padding: 6px 12px; border-radius: 30px; cursor: pointer; transition: background .15s; }
   .chip:hover { background: var(--azul-claro); }
@@ -149,22 +153,65 @@
   }
   function pesos(n) { return "$" + Math.round(n).toLocaleString("es-AR"); }
 
+  // La tienda (Drubbit, Vue 2) expone $shop.addToCart en su instancia raíz.
+  // Solo existe cuando el widget corre dentro de ecomodico.com.
+  function tiendaShop() {
+    var els = [document.getElementById("app"), document.querySelector("[data-app]")].concat([].slice.call(document.body.children));
+    for (var i = 0; i < els.length; i++) {
+      var vm = els[i] && els[i].__vue__;
+      if (vm) {
+        var sh = vm.$shop || (vm.$root && (vm.$root.$shop || vm.$root.$options.shop));
+        if (sh && typeof sh.addToCart === "function") return sh;
+      }
+    }
+    return null;
+  }
+
+  async function agregarAlCarrito(items) {
+    var shop = tiendaShop();
+    if (!shop) {
+      // Fuera de ecomodico.com (ej. localhost): abrimos la ficha para comprar desde ahí.
+      var aviso = burbujaBot("🛒 Desde acá no puedo tocar tu carrito. Te abro " + (items.length > 1 ? "los productos" : "el producto") + " para que lo agregues:\n" +
+        items.map(function (x) { return "[" + x.nombre + "](" + x.url + ")"; }).join("\n"));
+      if (items.length === 1) window.open(items[0].url, "_blank", "noopener");
+      return aviso;
+    }
+    var ok = [], mal = [];
+    for (var i = 0; i < items.length; i++) {
+      var x = items[i];
+      try {
+        await shop.addToCart({ productId: x.productId, variantId: x.variantId, qty: x.qty, sum: true,
+          showUpsells: false, showCart: i === items.length - 1 });
+        ok.push(x);
+      } catch (e) { mal.push(x); }
+    }
+    if (ok.length) burbujaBot("✅ Agregué al carrito: " + ok.map(function (x) { return x.qty + " × " + x.nombre; }).join(", ") + ".");
+    if (mal.length) { var e = burbujaBot("❌ No pude agregar: " + mal.map(function (x) { return "[" + x.nombre + "](" + x.url + ")"; }).join(", ")); e.className = "m error"; }
+  }
+
   function tarjetas(items) {
     var c = document.createElement("div"); c.className = "cards";
     items.forEach(function (p) {
-      var a = document.createElement("a"); a.className = "card"; a.href = p.url; a.target = "_blank"; a.rel = "noopener";
+      var d = document.createElement("div"); d.className = "card";
       var st = !p.disponible ? '<span class="stock no">Sin stock</span>'
         : p.stock != null && p.stock <= 5 ? '<span class="stock poco">⚠️ Últimas ' + p.stock + " unidades</span>"
         : '<span class="stock">✅ En stock</span>';
-      a.innerHTML =
+      var link = '<a href="' + esc(p.url) + '" target="_blank" rel="noopener">';
+      d.innerHTML =
         (p.descuento_pct ? '<span class="badge">−' + p.descuento_pct + "%</span>" : "") +
-        '<div class="img">' + (p.imagen ? '<img loading="lazy" alt="" src="' + esc(p.imagen) + '">' : "🛒") + "</div>" +
+        link + '<div class="img">' + (p.imagen ? '<img loading="lazy" alt="" src="' + esc(p.imagen) + '">' : "🛒") + "</div></a>" +
         '<div class="info">' + (p.marca ? '<span class="marca">' + esc(p.marca) + "</span>" : "") +
-        '<span class="nom">' + esc(p.nombre) + "</span>" +
+        link + '<span class="nom">' + esc(p.nombre) + "</span></a>" +
         (p.precio_anterior ? '<span class="prev">' + pesos(p.precio_anterior) + "</span>" : "") +
         '<span class="precio">' + pesos(p.precio) + "</span>" + st +
-        '<span class="cta">🛒 Comprar</span></div>';
-      c.appendChild(a);
+        (p.disponible ? '<button class="cta">🛒 Agregar</button>' : link + '<span class="cta sec">Ver producto</span></a>') + "</div>";
+      var b = d.querySelector("button.cta");
+      if (b) b.onclick = async function () {
+        b.disabled = true; b.textContent = "Agregando…";
+        await agregarAlCarrito([{ productId: p.id, variantId: p.variante_id, qty: 1, nombre: p.nombre, url: p.url }]);
+        b.disabled = false; b.textContent = "🛒 Agregar otro";
+      };
+      c.appendChild(d);
     });
     msgs.appendChild(c); scroll();
   }
@@ -207,6 +254,7 @@
           var ev = JSON.parse(linea.slice(6));
           if (ev.type === "sesion") { sesion = ev.id; store.set("ecomodico_chat_sesion", ev.id); }
           else if (ev.type === "text") texto_(ev.text);
+          else if (ev.type === "carrito") { if (indicador) { indicador.remove(); indicador = null; } agregarAlCarrito(ev.items); actual = null; }
           else if (ev.type === "productos") { if (indicador) { indicador.remove(); indicador = null; } tarjetas(ev.items); actual = null; }
           else if (ev.type === "separador") { actual = null; if (!indicador) indicador = cargando(); }
           else if (ev.type === "error") { var e = burbujaBot(ev.text); e.className = "m error"; }

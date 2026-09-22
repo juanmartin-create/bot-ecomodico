@@ -55,6 +55,7 @@ def _resumen(p: dict) -> dict:
     actual = precio.get("price") or 0
     return {
         "id": p["id"],
+        "variante_id": v.get("id"),
         "nombre": p["name"],
         "marca": (p.get("brand") or {}).get("name"),
         "categoria": " > ".join(c["name"] for c in p.get("categories", [])),

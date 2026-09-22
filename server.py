@@ -45,6 +45,8 @@ Tu trabajo tiene dos partes:
 Cómo trabajás:
 - Para cualquier pregunta sobre productos, precios, stock u ofertas, usá `buscar_productos`. Nunca inventes productos, precios ni stock: si no está en los resultados, no existe para vos. Probá con términos más simples o sinónimos si la primera búsqueda no trae nada (ej. "tele" -> "smart tv").
 - Cuando recomiendes productos, llamá a `mostrar_productos` con los 1 a 4 mejores para que aparezcan como tarjetas con foto, precio y botón de compra. En el texto no repitas toda la ficha: decí en una línea por qué conviene cada uno.
+- Cada vez que nombres un producto en el texto, poné su nombre como link: [Nombre corto](url). Así el cliente siempre puede abrirlo, aunque no vea las tarjetas.
+- Cuando el cliente diga que lo quiere ("me lo llevo", "agregalo", "dale", "quiero 2"), usá `agregar_al_carrito` con los ids y cantidades. Después de recomendar, cerrá ofreciendo agregarlo: "¿Te lo agrego al carrito?". Nunca digas que lo agregaste si no llamaste a la herramienta.
 - Usá `ver_producto` si te preguntan detalles (descripción, peso, características) de un producto puntual.
 - Si algo no está en la base de conocimiento o no podés resolverlo (estado de un pedido puntual, reclamos, factura, mayoristas), derivá a WhatsApp (11) 6184-8244 (https://wa.me/5491161848244), que atiende 24 hs. No tenés acceso a pedidos ni cuentas de clientes.
 - No prometas nada que no esté escrito acá (descuentos extra, fechas exactas de entrega, stock futuro).
@@ -105,6 +107,33 @@ TOOLS = [
     },
 ]
 
+TOOLS.append({
+    "name": "agregar_al_carrito",
+    "description": "Agrega productos al carrito del cliente en ecomodico.com (se ejecuta en su navegador, con su sesión). Usalo cuando el cliente confirma que quiere comprar. Los ids tienen que venir de buscar_productos o ver_producto.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "items": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 10,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "string", "description": "id del producto"},
+                        "cantidad": {"type": "integer", "minimum": 1, "maximum": 50},
+                    },
+                    "required": ["id", "cantidad"],
+                    "additionalProperties": False,
+                },
+            }
+        },
+        "required": ["items"],
+        "additionalProperties": False,
+    },
+    "eager_input_streaming": True,
+})
+
 # Estado en memoria: alcanza para localhost. En producción, Redis o una base.
 SESSIONS: dict[str, dict] = {}
 
@@ -118,7 +147,7 @@ def _session(sid: str | None) -> tuple[str, dict]:
 
 def _para_modelo(p: dict) -> dict:
     # La imagen solo la usa el widget; no gastamos tokens en eso.
-    return {k: v for k, v in p.items() if k not in ("imagen",)}
+    return {k: v for k, v in p.items() if k not in ("imagen", "variante_id")}
 
 
 async def _ejecutar(nombre: str, args: dict, ses: dict) -> tuple[str, dict | None]:
@@ -150,6 +179,31 @@ async def _ejecutar(nombre: str, args: dict, ses: dict) -> tuple[str, dict | Non
         if faltan:
             msg += f" Ids desconocidos (buscalos primero): {faltan}"
         return msg, ({"type": "productos", "items": items} if items else None)
+    if nombre == "agregar_al_carrito":
+        items = args.get("items")
+        if not isinstance(items, list) or not items:
+            raise ValueError("'items' tiene que ser una lista de {id, cantidad}.")
+        pedido, faltan = [], []
+        for it in items[:10]:
+            p = ses["vistos"].get(it.get("id")) if isinstance(it, dict) else None
+            qty = it.get("cantidad") if isinstance(it, dict) else None
+            if not p or not isinstance(qty, int) or qty < 1:
+                faltan.append(it)
+                continue
+            if not p["disponible"]:
+                faltan.append({"id": p["id"], "motivo": "sin stock"})
+                continue
+            if p.get("stock") is not None:
+                qty = min(qty, p["stock"])
+            pedido.append({"productId": p["id"], "variantId": p["variante_id"], "qty": qty,
+                           "nombre": p["nombre"], "url": p["url"], "precio": p["precio"]})
+        if not pedido:
+            raise ValueError(f"Nada para agregar. Revisá ids/stock: {faltan}")
+        total = sum(x["precio"] * x["qty"] for x in pedido)
+        msg = f"Enviado al carrito del cliente: {[(x['nombre'], x['qty']) for x in pedido]}. Subtotal de lo agregado: ${total:,.0f}".replace(",", ".")
+        if faltan:
+            msg += f". No se agregaron: {faltan}"
+        return msg, {"type": "carrito", "items": pedido}
     raise ValueError(f"Herramienta desconocida: {nombre}")
 
 
