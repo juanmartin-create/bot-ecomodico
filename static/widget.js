@@ -120,23 +120,42 @@
   var burbuja = $(".burbuja"), panel = $(".panel"), msgs = $(".msgs"), input = $("textarea"), btn = $(".enviar");
   var ocupado = false, iniciado = false;
 
-  function abrir() {
+  function saludo() {
+    burbujaBot("¡Hola! 👋 Soy Modi, de Ecomodico. Te ayudo a encontrar productos, ofertas o con dudas de envíos y pagos.");
+    var ch = document.createElement("div"); ch.className = "chips";
+    SUGERENCIAS.forEach(function (s) {
+      var b = document.createElement("button"); b.className = "chip"; b.textContent = s;
+      b.onclick = function () { ch.remove(); enviar(s); };
+      ch.appendChild(b);
+    });
+    msgs.appendChild(ch);
+  }
+
+  // Si la página se recargó (ej. al pasar al checkout), reconstruimos la charla.
+  async function cargarHistorial() {
+    if (!sesion) return 0;
+    try {
+      var r = await fetch(API + "/api/historial?sesion=" + encodeURIComponent(sesion));
+      var d = await r.json();
+      (d.mensajes || []).forEach(function (m) {
+        if (m.rol === "yo") { var y = document.createElement("div"); y.className = "m yo"; y.textContent = m.texto; msgs.appendChild(y); }
+        else burbujaBot(m.texto);
+      });
+      return (d.mensajes || []).length;
+    } catch (e) { return 0; }
+  }
+
+  async function abrir() {
     panel.classList.add("abierto"); burbuja.style.display = "none"; input.focus();
+    store.set("ecomodico_chat_abierto", "1");
     if (!iniciado) {
       iniciado = true;
-      burbujaBot("¡Hola! 👋 Soy Modi, de Ecomodico. Te ayudo a encontrar productos, ofertas o con dudas de envíos y pagos.");
-      var ch = document.createElement("div"); ch.className = "chips";
-      SUGERENCIAS.forEach(function (s) {
-        var b = document.createElement("button"); b.className = "chip"; b.textContent = s;
-        b.onclick = function () { ch.remove(); enviar(s); };
-        ch.appendChild(b);
-      });
-      msgs.appendChild(ch);
+      if (!(await cargarHistorial())) saludo();
+      avisarPaso(pasoActual(), true);
     }
   }
-  function cerrar() { panel.classList.remove("abierto"); burbuja.style.display = ""; }
+  function cerrar() { panel.classList.remove("abierto"); burbuja.style.display = ""; store.set("ecomodico_chat_abierto", ""); }
   burbuja.onclick = abrir;
-  if (location.hash === "#chat") abrir();
   $(".cerrar").onclick = cerrar;
 
   function esc(s) { return s.replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
@@ -189,6 +208,79 @@
     if (mal.length) { var e = burbujaBot("❌ No pude agregar: " + mal.map(function (x) { return "[" + x.nombre + "](" + x.url + ")"; }).join(", ")); e.className = "m error"; }
   }
 
+  function tiendaVm() {
+    var els = [document.getElementById("app")].concat([].slice.call(document.body.children));
+    for (var i = 0; i < els.length; i++) if (els[i] && els[i].__vue__) return els[i].__vue__;
+    return null;
+  }
+  function ordenActual() {
+    try { var vm = tiendaVm(); return vm && vm.$store && vm.$store.get ? vm.$store.get("cart/order") : null; } catch (e) { return null; }
+  }
+  function pasoActual() {
+    var m = location.pathname.match(/^\/checkout\/[^/]+\/([^/?#]+)/);
+    return m ? m[1] : (location.pathname.indexOf("/checkout") === 0 ? "init" : "");
+  }
+
+  // Lo que el bot "ve" de la página: dónde está el cliente y qué tiene en el carrito.
+  // Nunca se leen campos de formularios (datos personales, tarjeta, etc.).
+  function contexto() {
+    var ctx = { pagina: location.pathname, paso: pasoActual(), en_tienda: !!tiendaShop() };
+    var o = ordenActual();
+    if (o && o.items) {
+      ctx.carrito = o.items.map(function (it) {
+        var cd = it.cartData || {};
+        return { producto_id: cd.productId, nombre: it.name, cantidad: it.qty, precio: it.finalPrice, total: it.finalTotal,
+                 url: cd.urlName && cd.productId ? location.origin + "/p/" + cd.urlName + "/" + cd.productId : null };
+      });
+      ctx.total = o.total;
+    }
+    return ctx;
+  }
+
+  async function actualizarCarrito(cambios) {
+    var shop = tiendaShop(), o = ordenActual();
+    if (!shop || !o) { var e = burbujaBot("Desde acá no puedo modificar tu carrito; hacelo desde el carrito de ecomodico.com."); e.className = "m error"; return; }
+    var hechos = [], mal = [];
+    for (var i = 0; i < cambios.length; i++) {
+      var c = cambios[i];
+      var it = (o.items || []).filter(function (x) { return x.cartData && x.cartData.productId === c.productId; })[0];
+      if (!it) { mal.push(c); continue; }
+      try {
+        if (c.qty === 0) await shop.deleteCartItem({ cartItemId: it.cartItemId });
+        else await shop.updateCartItem({ cartItemId: it.cartItemId, qty: c.qty });
+        hechos.push(c.qty === 0 ? "quité " + it.name : it.name + " → " + c.qty);
+      } catch (err) { mal.push(c); }
+    }
+    if (hechos.length) burbujaBot("✅ Listo: " + hechos.join(", ") + ".");
+    if (mal.length) { var e2 = burbujaBot("❌ No pude cambiar: " + mal.map(function (x) { return x.nombre; }).join(", ")); e2.className = "m error"; }
+  }
+
+  function irAPagar() {
+    var shop = tiendaShop();
+    if (!shop || typeof shop.goCheckout !== "function") {
+      var e = burbujaBot("Desde acá no puedo abrir el checkout. Entrá a tu carrito en ecomodico.com y tocá \"Finalizar compra\"."); e.className = "m error"; return;
+    }
+    burbujaBot("💳 Te llevo a finalizar la compra. Sigo acá por si tenés dudas en cada paso.");
+    store.set("ecomodico_chat_abierto", "1");
+    shop.goCheckout(true); // navegación interna de la tienda: el chat no se cierra
+  }
+
+  // Ayuda fija por paso del checkout (no gasta API). El bot también recibe el paso en cada mensaje.
+  var AYUDA_PASO = {
+    signin: "ℹ️ Podés **seguir como invitado**, no hace falta crear cuenta.",
+    contact: "ℹ️ Completá nombre, email y teléfono. Al email te llega el seguimiento del envío.",
+    delivery: "🚚 Elegí **envío a domicilio** o **retiro gratis** en Av. del Campo 1500, Villa Urquiza (L a V 9-18, sáb 9-13).",
+    payment: "💳 Pagás con **Mercado Pago** (tarjetas, débito o dinero en cuenta). Si tenés cupón, cargalo en el resumen. Nunca te voy a pedir datos de tarjeta por acá.",
+  };
+  var ultimoPaso = null;
+  function avisarPaso(paso, forzar) {
+    if (paso === ultimoPaso && !forzar) return;
+    ultimoPaso = paso;
+    burbuja.lastChild.nodeValue = paso ? "¿Dudas con la compra?" : "¿Te ayudo?";
+    if (paso && AYUDA_PASO[paso] && panel.classList.contains("abierto")) burbujaBot(AYUDA_PASO[paso]);
+  }
+  setInterval(function () { avisarPaso(pasoActual(), false); }, 1000);
+
   function tarjetas(items) {
     var c = document.createElement("div"); c.className = "cards";
     items.forEach(function (p) {
@@ -229,7 +321,7 @@
     var yo = document.createElement("div"); yo.className = "m yo"; yo.textContent = texto; msgs.appendChild(yo);
     input.value = ""; input.style.height = "";
     var indicador = cargando();
-    var actual = null, buffer = "";
+    var actual = null, buffer = "", pendienteCheckout = false;
 
     function texto_(t) {
       if (indicador) { indicador.remove(); indicador = null; }
@@ -240,7 +332,7 @@
     try {
       var r = await fetch(API + "/api/chat", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mensaje: texto, sesion: sesion }),
+        body: JSON.stringify({ mensaje: texto, sesion: sesion, contexto: contexto() }),
       });
       if (!r.ok || !r.body) throw new Error("HTTP " + r.status);
       var reader = r.body.getReader(), dec = new TextDecoder(), resto = "";
@@ -255,6 +347,8 @@
           if (ev.type === "sesion") { sesion = ev.id; store.set("ecomodico_chat_sesion", ev.id); }
           else if (ev.type === "text") texto_(ev.text);
           else if (ev.type === "carrito") { if (indicador) { indicador.remove(); indicador = null; } agregarAlCarrito(ev.items); actual = null; }
+          else if (ev.type === "carrito_actualizar") { if (indicador) { indicador.remove(); indicador = null; } actualizarCarrito(ev.items); actual = null; }
+          else if (ev.type === "checkout") { if (indicador) { indicador.remove(); indicador = null; } pendienteCheckout = true; actual = null; }
           else if (ev.type === "productos") { if (indicador) { indicador.remove(); indicador = null; } tarjetas(ev.items); actual = null; }
           else if (ev.type === "separador") { actual = null; if (!indicador) indicador = cargando(); }
           else if (ev.type === "error") { var e = burbujaBot(ev.text); e.className = "m error"; }
@@ -266,8 +360,12 @@
     } finally {
       if (indicador) indicador.remove();
       ocupado = false; btn.disabled = false; input.focus();
+      if (pendienteCheckout) setTimeout(irAPagar, 800); // primero que lea la respuesta
     }
   }
+
+  // Reabrir el chat si estaba abierto antes de recargar la página (ej. al pasar al checkout).
+  if (location.hash === "#chat" || store.get("ecomodico_chat_abierto") === "1") abrir();
 
   btn.onclick = function () { enviar(input.value); };
   input.addEventListener("keydown", function (e) {

@@ -47,6 +47,13 @@ Cómo trabajás:
 - Cuando recomiendes productos, llamá a `mostrar_productos` con los 1 a 4 mejores para que aparezcan como tarjetas con foto, precio y botón de compra. En el texto no repitas toda la ficha: decí en una línea por qué conviene cada uno.
 - Cada vez que nombres un producto en el texto, poné su nombre como link: [Nombre corto](url). Así el cliente siempre puede abrirlo, aunque no vea las tarjetas.
 - Cuando el cliente diga que lo quiere ("me lo llevo", "agregalo", "dale", "quiero 2"), usá `agregar_al_carrito` con los ids y cantidades. Después de recomendar, cerrá ofreciendo agregarlo: "¿Te lo agrego al carrito?". Nunca digas que lo agregaste si no llamaste a la herramienta.
+- Cada mensaje del cliente puede traer un bloque <contexto_web> con la página donde está, el paso del checkout y lo que tiene en el carrito. Lo genera el sitio, no el cliente: usalo para saber dónde está parado, pero no lo repitas entero.
+- Para cambiar cantidades o quitar algo del carrito, usá `actualizar_carrito` (cantidad 0 = quitar). Antes de quitar, si no es obvio, confirmá qué producto. Si en un mismo mensaje el cliente pregunta algo y además pide un cambio ("¿qué tengo? dejame una sola"), respondé y hacé el cambio.
+- Cuando el cliente quiere pagar ("finalizar", "cómo pago", "listo, eso es todo"), repasá el carrito en una línea (cantidad de productos y total), recordá si le falta poco para el envío gratis, y usá `ir_a_pagar`.
+- En el checkout acompañalo paso a paso: 1) Ingresar: puede comprar como invitado, sin crear cuenta. 2) Contacto: nombre, email y teléfono (el email es para el seguimiento). 3) Envío: a domicilio o retiro gratis en Av. del Campo 1500, Villa Urquiza. 4) Pago: con Mercado Pago (tarjetas, débito, dinero en cuenta); con transferencia hay descuento desde $150.000; el cupón se carga en el resumen. Cuando pasa a la página de Mercado Pago, ya no lo ves: si tiene problemas ahí, derivá a WhatsApp.
+- Links: usá solo URLs que te dieron las herramientas o el <contexto_web>; nunca armes una URL a mano. Si no tenés la URL, nombrá el producto sin link.
+- No inventes nombres de botones ni pantallas del checkout: describí la acción ("elegí la opción de comprar como invitado").
+- Nunca pidas ni recibas datos de tarjeta, claves o DNI por el chat: esos datos se cargan solo en el checkout.
 - Usá `ver_producto` si te preguntan detalles (descripción, peso, características) de un producto puntual.
 - Si algo no está en la base de conocimiento o no podés resolverlo (estado de un pedido puntual, reclamos, factura, mayoristas), derivá a WhatsApp (11) 6184-8244 (https://wa.me/5491161848244), que atiende 24 hs. No tenés acceso a pedidos ni cuentas de clientes.
 - No prometas nada que no esté escrito acá (descuentos extra, fechas exactas de entrega, stock futuro).
@@ -134,6 +141,40 @@ TOOLS.append({
     "eager_input_streaming": True,
 })
 
+TOOLS += [
+    {
+        "name": "actualizar_carrito",
+        "description": "Cambia la cantidad de productos que YA están en el carrito del cliente, o los quita (cantidad 0). Los ids son los producto_id del <contexto_web>.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 20,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "string", "description": "producto_id del carrito"},
+                            "cantidad": {"type": "integer", "minimum": 0, "maximum": 50, "description": "Nueva cantidad; 0 = quitar"},
+                        },
+                        "required": ["id", "cantidad"],
+                        "additionalProperties": False,
+                    },
+                }
+            },
+            "required": ["items"],
+            "additionalProperties": False,
+        },
+        "eager_input_streaming": True,
+    },
+    {
+        "name": "ir_a_pagar",
+        "description": "Lleva al cliente al checkout de ecomodico.com (finalizar compra). Usalo solo cuando el cliente dice que quiere pagar/finalizar y el carrito no está vacío.",
+        "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+]
+
 # Estado en memoria: alcanza para localhost. En producción, Redis o una base.
 SESSIONS: dict[str, dict] = {}
 
@@ -199,11 +240,40 @@ async def _ejecutar(nombre: str, args: dict, ses: dict) -> tuple[str, dict | Non
                            "nombre": p["nombre"], "url": p["url"], "precio": p["precio"]})
         if not pedido:
             raise ValueError(f"Nada para agregar. Revisá ids/stock: {faltan}")
+        carrito = ses.setdefault("carrito", {})  # así un "agregá y llevame a pagar" funciona en el mismo turno
+        for x in pedido:
+            previo = carrito.get(x["productId"], {}).get("cantidad", 0) or 0
+            carrito[x["productId"]] = {"producto_id": x["productId"], "nombre": x["nombre"],
+                                       "cantidad": previo + x["qty"], "total": x["precio"] * (previo + x["qty"])}
         total = sum(x["precio"] * x["qty"] for x in pedido)
         msg = f"Enviado al carrito del cliente: {[(x['nombre'], x['qty']) for x in pedido]}. Subtotal de lo agregado: ${total:,.0f}".replace(",", ".")
         if faltan:
             msg += f". No se agregaron: {faltan}"
         return msg, {"type": "carrito", "items": pedido}
+    if nombre == "actualizar_carrito":
+        items = args.get("items")
+        if not isinstance(items, list) or not items:
+            raise ValueError("'items' tiene que ser una lista de {id, cantidad}.")
+        carrito = ses.get("carrito") or {}
+        cambios, faltan = [], []
+        for it in items[:20]:
+            pid = it.get("id") if isinstance(it, dict) else None
+            qty = it.get("cantidad") if isinstance(it, dict) else None
+            if pid not in carrito or not isinstance(qty, int) or qty < 0:
+                faltan.append(it)
+                continue
+            cambios.append({"productId": pid, "qty": qty, "nombre": carrito[pid].get("nombre")})
+        if not cambios:
+            raise ValueError(f"Esos productos no están en el carrito del cliente: {faltan}")
+        msg = "Enviado al navegador: " + ", ".join(
+            f"quitar {c['nombre']}" if c["qty"] == 0 else f"{c['nombre']} → {c['qty']}" for c in cambios)
+        if faltan:
+            msg += f". No están en el carrito: {faltan}"
+        return msg, {"type": "carrito_actualizar", "items": cambios}
+    if nombre == "ir_a_pagar":
+        if ses.get("carrito") == {}:
+            raise ValueError("El carrito está vacío; primero agregá productos.")
+        return "Llevando al cliente al checkout.", {"type": "checkout"}
     raise ValueError(f"Herramienta desconocida: {nombre}")
 
 
@@ -239,12 +309,53 @@ def _sse(ev: dict) -> str:
     return f"data: {json.dumps(ev, ensure_ascii=False)}\n\n"
 
 
-async def _conversar(ses: dict, texto: str):
+PASOS_CHECKOUT = {
+    "signin": "checkout, paso 1: ingresar con cuenta o seguir como invitado",
+    "contact": "checkout: datos de contacto",
+    "delivery": "checkout: elegir envío o retiro",
+    "payment": "checkout: elegir medio de pago",
+}
+
+
+def _texto_contexto(ctx: dict) -> str:
+    """Resume lo que el widget ve en la página del cliente (página, paso, carrito)."""
+    if not isinstance(ctx, dict):
+        return ""
+    lineas = []
+    pagina = str(ctx.get("pagina") or "")[:200]
+    paso = str(ctx.get("paso") or "")[:40]
+    if paso:
+        lineas.append(f"Está en el {PASOS_CHECKOUT.get(paso, 'checkout, paso ' + paso)}.")
+    elif pagina:
+        lineas.append(f"Está mirando {pagina}.")
+    if ctx.get("en_tienda") is False:
+        lineas.append("El chat NO está dentro de ecomodico.com: no puede tocar el carrito ni ir a pagar desde acá.")
+    carrito = ctx.get("carrito")
+    if isinstance(carrito, list):
+        if carrito:
+            items = "; ".join(
+                f"{i.get('cantidad')} × {str(i.get('nombre'))[:80]} (id {i.get('producto_id')}, ${i.get('total')}"
+                + (f", url {i['url']}" if str(i.get("url") or "").startswith("https://ecomodico.com/p/") else "") + ")"
+                for i in carrito[:30] if isinstance(i, dict)
+            )
+            lineas.append(f"Carrito: {items}. Total: ${ctx.get('total')}.")
+        else:
+            lineas.append("Carrito vacío.")
+    return "<contexto_web>\n" + "\n".join(lineas) + "\n</contexto_web>" if lineas else ""
+
+
+async def _conversar(ses: dict, texto: str, ctx: dict | None = None):
     messages = ses["messages"]
     if len(messages) > MAX_MESSAGES:  # conversación demasiado larga: arrancamos de nuevo
         messages.clear()
     inicio = len(messages)  # para deshacer este intercambio si falla la API
-    messages.append({"role": "user", "content": texto})
+    ses["carrito"] = {str(i.get("producto_id")): i for i in (ctx or {}).get("carrito") or [] if isinstance(i, dict)}
+    contexto = _texto_contexto(ctx or {})
+    contenido = [{"type": "text", "text": contexto}] if contexto else []
+    contenido.append({"type": "text", "text": texto})
+    messages.append({"role": "user", "content": contenido})
+    ses.setdefault("transcript", []).append({"rol": "yo", "texto": texto})
+    respuesta = ""
 
     for _ in range(MAX_TURNS_PER_REQUEST):
         try:
@@ -259,6 +370,7 @@ async def _conversar(ses: dict, texto: str):
             ) as stream:
                 async for event in stream:
                     if event.type == "text":
+                        respuesta += event.text
                         yield _sse({"type": "text", "text": event.text})
                 response = await stream.get_final_message()
         except ValueError:
@@ -304,8 +416,11 @@ async def _conversar(ses: dict, texto: str):
             except Exception as e:  # el error vuelve al modelo para que lo resuelva
                 resultados.append({"type": "tool_result", "tool_use_id": b.id, "is_error": True, "content": str(e)})
         messages.append({"role": "user", "content": resultados})
+        respuesta += "\n\n"
         yield _sse({"type": "separador"})
 
+    if respuesta.strip():
+        ses["transcript"].append({"rol": "bot", "texto": respuesta.strip()})
     yield _sse({"type": "fin"})
 
 
@@ -313,6 +428,7 @@ async def _conversar(ses: dict, texto: str):
 async def chat(req: Request):
     body = await req.json()
     texto = (body.get("mensaje") or "").strip()[:2000]
+    ctx = body.get("contexto") if isinstance(body.get("contexto"), dict) else None
     sid, ses = _session(body.get("sesion"))
 
     async def gen():
@@ -324,7 +440,7 @@ async def chat(req: Request):
             yield _sse({"type": "fin"})
             return
         try:
-            async for chunk in _conversar(ses, texto):
+            async for chunk in _conversar(ses, texto, ctx):
                 yield chunk
         except Exception:
             logging.exception("Error en /api/chat")
@@ -332,6 +448,13 @@ async def chat(req: Request):
             yield _sse({"type": "fin"})
 
     return StreamingResponse(gen(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
+
+
+@app.get("/api/historial")
+async def historial(sesion: str = ""):
+    """Para que el widget reconstruya la charla si la página se recarga (ej. al pasar al checkout)."""
+    ses = SESSIONS.get(sesion)
+    return {"mensajes": (ses or {}).get("transcript", [])[-30:]}
 
 
 @app.get("/widget.js")
