@@ -34,7 +34,7 @@
     transition: transform .15s, box-shadow .15s, background .15s;
   }
   .burbuja:hover { transform: translateY(-1px); background: var(--azul-osc); box-shadow: 0 6px 20px rgba(34,116,165,.3); }
-  .av { width: 40px; height: 40px; border-radius: 50%; background: #fff; display: flex; align-items: center; justify-content: center; font-size: 20px; flex-shrink: 0; }
+  .av { width: 40px; height: 40px; border-radius: 50%; flex-shrink: 0; display: block; object-fit: cover; box-shadow: 0 0 0 2px #fff; }
   .panel {
     position: fixed; right: 20px; bottom: 20px; z-index: 2147483001;
     width: 380px; height: min(640px, calc(100vh - 40px)); background: var(--fondo);
@@ -107,9 +107,9 @@
   var root = host.attachShadow({ mode: "open" });
   root.innerHTML =
     "<style>" + css + "</style>" +
-    '<button class="burbuja" aria-label="Abrir chat de ayuda"><span class="av" aria-hidden="true">🛒</span>¿Te ayudo?</button>' +
+    '<button class="burbuja" aria-label="Abrir chat de ayuda"><img class="av" alt="" src="' + API + '/modi.png">¿Te ayudo?</button>' +
     '<div class="panel" role="dialog" aria-label="Chat con Modi">' +
-      '<div class="cab"><span class="av" aria-hidden="true">🛒</span><div class="t"><b>Modi · Ecomodico</b><span>En línea</span></div>' +
+      '<div class="cab"><img class="av" alt="" src="' + API + '/modi.png"><div class="t"><b>Modi · Ecomodico</b><span>En línea</span></div>' +
       '<button class="cerrar" aria-label="Cerrar">✕</button></div>' +
       '<div class="msgs" aria-live="polite"></div>' +
       '<div class="pie"><textarea rows="1" placeholder="Escribí tu consulta…" aria-label="Mensaje"></textarea><button class="enviar">Enviar</button></div>' +
