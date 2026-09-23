@@ -4,3 +4,4 @@ __pycache__/
 uso.jsonl
 server.log
 server_*.log
+datos.db

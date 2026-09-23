@@ -31,6 +31,14 @@ Si cambiás los `.md`, reiniciá el servidor.
 
 Para eso el servidor tiene que estar publicado (Render, Railway, un VPS). Antes de producción conviene: guardar sesiones en Redis o una base (hoy viven en memoria), limitar el CORS al dominio de ecomodico.com y agregar rate limiting por IP.
 
+## Medición: registro de conversaciones y reporte
+
+Cada conversación se guarda en `datos.db` (SQLite, local): mensajes del cliente y del bot, herramientas usadas, tokens, costo y errores, más los eventos del widget (chat abierto, clic en tarjeta, agregado al carrito, checkout, compra confirmada, 👍/👎). No se guardan datos de formularios ni de pago.
+
+- **Reporte:** http://localhost:8787/reporte (embudo, calidad, costo, últimas conversaciones con transcripción).
+- **API:** `GET /api/reporte?dias=30`, `GET /api/transcripcion?sesion=...`.
+- La compra se atribuye cuando el cliente que usó el chat llega a `/user/orders/<id>` (detalle de su pedido) con el widget instalado.
+
 ## Configuración (.env)
 
 - `ECOMODICO_MODEL`: por defecto `claude-sonnet-5`, el más barato que completó la venta entera en las pruebas. `claude-haiku-4-5` cuesta la mitad pero falla en pedidos compuestos ("¿qué tengo? dejame una sola") y a veces no lleva a pagar. `claude-opus-5` es el más preciso (3× Sonnet).

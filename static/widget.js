@@ -18,6 +18,18 @@
   };
   var sesion = store.get("ecomodico_chat_sesion");
 
+  // Eventos de medición (chat abierto, clic en tarjeta, compra, 👍/👎). Solo lo que pasa en el chat.
+  function evento(tipo, datos) {
+    if (!sesion) {
+      sesion = (window.crypto && crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random()).replace(/[^a-z0-9]/gi, "");
+      store.set("ecomodico_chat_sesion", sesion);
+    }
+    try {
+      fetch(API + "/api/evento", { method: "POST", headers: { "Content-Type": "application/json" }, keepalive: true,
+        body: JSON.stringify({ sesion: sesion, tipo: tipo, datos: datos || {} }) }).catch(function () {});
+    } catch (e) {}
+  }
+
   var css = `
   @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&display=swap');
   :host { all: initial; }
@@ -97,6 +109,10 @@
   .pie textarea:focus { border-color: var(--azul); box-shadow: 0 0 0 3px rgba(34,116,165,.15); }
   .pie button { height: 42px; padding: 0 16px; border: 0; border-radius: 30px; background: var(--azul); color: #fff; font-size: 14px; font-weight: 600; cursor: pointer; }
   .pie button:disabled { opacity: .4; cursor: not-allowed; }
+  .fb { display: flex; gap: 2px; justify-content: flex-end; margin-top: 4px; }
+  .fb button { background: none; border: 0; cursor: pointer; font-size: 13px; opacity: .45; padding: 2px 4px; border-radius: 4px; }
+  .fb button:hover { opacity: 1; background: var(--azul-claro); }
+  .fb-ok { font-size: 11px; color: var(--texto-2); }
   .legal { font-size: 11px; color: #999; text-align: center; padding: 0 12px 8px; background: #fff; }
   .legal a { color: var(--texto-2); }
   `;
@@ -148,6 +164,10 @@
   async function abrir() {
     panel.classList.add("abierto"); burbuja.style.display = "none"; input.focus();
     store.set("ecomodico_chat_abierto", "1");
+    if (store.get("ecomodico_chat_ev_abierto") !== (sesion || "nuevo")) {
+      evento("chat_abierto", { pagina: location.pathname });
+      store.set("ecomodico_chat_ev_abierto", sesion);
+    }
     if (!iniciado) {
       iniciado = true;
       if (!(await cargarHistorial())) saludo();
@@ -174,6 +194,20 @@
       .replace(/\n/g, "<br>");
   }
   function scroll() { msgs.scrollTop = msgs.scrollHeight; }
+  // 👍/👎 discretos en la última respuesta del bot: el KPI de calidad más directo que tenemos.
+  function botonesFeedback(burb, texto) {
+    var f = document.createElement("div"); f.className = "fb";
+    ["up", "down"].forEach(function (v) {
+      var b = document.createElement("button"); b.type = "button"; b.textContent = v === "up" ? "👍" : "👎";
+      b.setAttribute("aria-label", v === "up" ? "Me sirvió" : "No me sirvió");
+      b.onclick = function () {
+        evento("feedback", { valor: v, respuesta: (texto || "").slice(0, 200) });
+        f.innerHTML = '<span class="fb-ok">' + (v === "up" ? "¡Gracias!" : "Gracias, lo tenemos en cuenta.") + "</span>";
+      };
+      f.appendChild(b);
+    });
+    burb.appendChild(f);
+  }
   function burbujaBot(texto) {
     var d = document.createElement("div"); d.className = "m bot"; d.innerHTML = md(texto); msgs.appendChild(d); scroll(); return d;
   }
@@ -239,6 +273,13 @@
   }
   function contexto() {
     var ctx = { pagina: location.pathname, paso: pasoActual(), en_tienda: !!tiendaShop() };
+    // Solo si está logueado y solo el nombre de pila: alcanza para saludar, no se manda email ni nada más.
+    try {
+      var vm = tiendaVm(), u = vm && vm.$store && vm.$store.get ? vm.$store.get("shop/user") : null;
+      ctx.logueado = !!(u && (u.id || u.email));
+      var nom = u && (u.firstName || u.first_name || u.name);
+      if (ctx.logueado && typeof nom === "string" && nom.trim()) ctx.nombre = nom.trim().split(/\s+/)[0].slice(0, 30);
+    } catch (e) { ctx.logueado = false; }
     var mp = location.pathname.match(/^\/p\/[^/]+\/[0-9a-f-]{36}/);
     if (mp) ctx.producto_actual = location.origin + mp[0];
     var o = ordenActual(), regla = reglaEnvioGratis();
@@ -298,7 +339,22 @@
     burbuja.lastChild.nodeValue = paso ? "¿Dudas con la compra?" : "¿Te ayudo?";
     if (paso && AYUDA_PASO[paso] && panel.classList.contains("abierto")) burbujaBot(AYUDA_PASO[paso]);
   }
-  setInterval(function () { avisarPaso(pasoActual(), false); }, 1000);
+  // Compra confirmada: la tienda lleva al detalle del pedido (/user/orders/<id>). Se registra una vez por pedido,
+  // y solo si esta persona usó el chat en algún momento (si no, no hay sesión que atribuir).
+  function detectarCompra() {
+    var m = location.pathname.match(/^\/user\/orders\/([^/?#]+)/);
+    if (!m || !store.get("ecomodico_chat_sesion")) return;
+    var pedido = m[1];
+    if (store.get("ecomodico_chat_compra_" + pedido)) return;
+    var total = null, estado = null;
+    try {
+      var rd = (window.__SERVER_DATA__ || {})._resolvedData || {}, o = rd.order || rd.orderDetail || null;
+      if (o) { total = o.total; estado = o.mainStatus || o.paymentStatus; }
+    } catch (e) {}
+    store.set("ecomodico_chat_compra_" + pedido, "1");
+    evento("compra", { pedido: pedido, total: total, estado: estado });
+  }
+  setInterval(function () { avisarPaso(pasoActual(), false); detectarCompra(); }, 1000);
 
   function tarjetas(items) {
     var c = document.createElement("div"); c.className = "cards";
@@ -316,8 +372,10 @@
         (p.precio_anterior ? '<span class="prev">' + pesos(p.precio_anterior) + "</span>" : "") +
         '<span class="precio">' + pesos(p.precio) + "</span>" + st +
         (p.disponible ? '<button class="cta">🛒 Agregar</button>' : link + '<span class="cta sec">Ver producto</span></a>') + "</div>";
+      [].forEach.call(d.querySelectorAll("a"), function (a) { a.addEventListener("click", function () { evento("tarjeta_click", { producto: p.nombre }); }); });
       var b = d.querySelector("button.cta");
       if (b) b.onclick = async function () {
+        evento("agregar_click", { producto: p.nombre });
         b.disabled = true; b.textContent = "Agregando…";
         await agregarAlCarrito([{ productId: p.id, variantId: p.variante_id, qty: 1, nombre: p.nombre, url: p.url }]);
         b.disabled = false; b.textContent = "🛒 Agregar otro";
@@ -340,11 +398,12 @@
     var yo = document.createElement("div"); yo.className = "m yo"; yo.textContent = texto; msgs.appendChild(yo);
     input.value = ""; input.style.height = "";
     var indicador = cargando();
-    var actual = null, buffer = "", pendienteCheckout = false;
+    var actual = null, buffer = "", pendienteCheckout = false, ultimoBot = null, ultimoTexto = "";
 
     function texto_(t) {
       if (indicador) { indicador.remove(); indicador = null; }
-      if (!actual) { buffer = ""; actual = burbujaBot(""); }
+      if (!actual) { buffer = ""; actual = burbujaBot(""); ultimoBot = actual; }
+      ultimoTexto = buffer + t;
       buffer += t; actual.innerHTML = md(buffer); scroll();
     }
 
@@ -379,6 +438,7 @@
     } finally {
       if (indicador) indicador.remove();
       ocupado = false; btn.disabled = false; input.focus();
+      if (ultimoBot) botonesFeedback(ultimoBot, ultimoTexto);
       if (pendienteCheckout) setTimeout(irAPagar, 800); // primero que lea la respuesta
     }
   }

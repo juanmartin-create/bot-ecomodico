@@ -20,6 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 
 import catalogo
+import registro
 
 ROOT = Path(__file__).parent
 load_dotenv(ROOT / ".env")
@@ -27,11 +28,15 @@ load_dotenv(ROOT / ".env")
 MODEL = os.getenv("ECOMODICO_MODEL", "claude-sonnet-5")  # el más barato que completó la venta entera en las pruebas
 EFFORT = os.getenv("ECOMODICO_EFFORT", "low")  # solo aplica a Opus/Sonnet; Haiku 4.5 no acepta effort
 MAX_TURNS_PER_REQUEST = 6
+# Mientras el modelo llama a estas herramientas, lo que escribe es narración interna ("Busco yerba:") y no se muestra.
+HERRAMIENTAS_SILENCIOSAS = {"buscar_productos", "buscar_varios", "ver_producto"}
 MAX_MESSAGES = 60
 
 client = anthropic.AsyncAnthropic()
 app = FastAPI(title="Ecomodico Bot")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+registro.iniciar()
 
 CONOCIMIENTO = (ROOT / "conocimiento.md").read_text(encoding="utf-8")
 METODO_VENTA = (ROOT / "metodo_venta.md").read_text(encoding="utf-8")
@@ -408,6 +413,9 @@ def _texto_contexto(ctx: dict) -> str:
         lineas.append(f"Está en la página {pagina}.")
     if ctx.get("en_tienda") is False:
         lineas.append("El chat NO está dentro de ecomodico.com: no puede tocar el carrito ni ir a pagar desde acá.")
+    nombre = str(ctx.get("nombre") or "").strip()[:30]
+    if ctx.get("logueado") and nombre:
+        lineas.append(f"Cliente con sesión iniciada, se llama {nombre}: podés usar su nombre una vez al saludar, sin repetirlo en cada mensaje.")
     carrito = ctx.get("carrito")
     if isinstance(carrito, list):
         carrito = [i for i in carrito[:30] if isinstance(i, dict)]
@@ -427,7 +435,7 @@ def _texto_contexto(ctx: dict) -> str:
     return "<contexto_web>\n" + "\n".join(lineas) + "\n</contexto_web>" if lineas else ""
 
 
-async def _conversar(ses: dict, texto: str, ctx: dict | None = None):
+async def _conversar(sid: str, ses: dict, texto: str, ctx: dict | None = None):
     messages = ses["messages"]
     if len(messages) > MAX_MESSAGES:  # conversación demasiado larga: arrancamos de nuevo
         messages.clear()
@@ -439,6 +447,12 @@ async def _conversar(ses: dict, texto: str, ctx: dict | None = None):
     messages.append({"role": "user", "content": contenido})
     ses.setdefault("transcript", []).append({"rol": "yo", "texto": texto})
     respuesta = ""
+    reg = {"herramientas": [], "llamadas": 0, "tin": 0, "tout": 0, "costo": 0.0, "error": None}
+
+    def _fallo(msg: str):
+        reg["error"] = msg
+        registro.mensaje_bot(sid, respuesta, reg["herramientas"], reg["llamadas"], reg["tin"], reg["tout"], reg["costo"], msg)
+        return _sse({"type": "error", "text": msg})
 
     for _ in range(MAX_TURNS_PER_REQUEST):
         try:
@@ -458,24 +472,28 @@ async def _conversar(ses: dict, texto: str, ctx: dict | None = None):
             # JSON de herramienta imposible de parsear: reintentamos el turno.
             continue
         except anthropic.AuthenticationError:
-            yield _sse({"type": "error", "text": "Falta configurar ANTHROPIC_API_KEY en el archivo .env."})
+            yield _fallo("Falta configurar ANTHROPIC_API_KEY en el archivo .env.")
             del messages[inicio:]
             return
         except anthropic.RateLimitError:
-            yield _sse({"type": "error", "text": "Hay mucha demanda en este momento. Probá de nuevo en unos segundos."})
+            yield _fallo("Hay mucha demanda en este momento. Probá de nuevo en unos segundos.")
             del messages[inicio:]
             return
         except anthropic.APIStatusError as e:
-            yield _sse({"type": "error", "text": f"Error de la API ({e.status_code})."})
+            yield _fallo(f"Error de la API ({e.status_code}).")
             del messages[inicio:]
             return
         except anthropic.APIConnectionError:
-            yield _sse({"type": "error", "text": "No me pude conectar. Revisá tu conexión."})
+            yield _fallo("No me pude conectar. Revisá tu conexión.")
             del messages[inicio:]
             return
 
         messages.append({"role": "assistant", "content": response.content})
         _registrar_uso(response)
+        reg["llamadas"] += 1
+        reg["tin"] += (response.usage.input_tokens or 0) + (response.usage.cache_creation_input_tokens or 0) + (response.usage.cache_read_input_tokens or 0)
+        reg["tout"] += response.usage.output_tokens or 0
+        reg["costo"] += registro.costo_llamada(response.model, response.usage)
 
         if response.stop_reason == "pause_turn":
             continue
@@ -483,8 +501,11 @@ async def _conversar(ses: dict, texto: str, ctx: dict | None = None):
         # El texto que acompaña a una llamada a herramienta es el modelo narrando lo que
         # va a hacer ("Buscá proteína:", "Voy a buscar…"): no se le muestra al cliente.
         # Solo se muestra la respuesta final, la que no pide más herramientas.
+        # Excepción: si en ese turno solo llama a herramientas de acción (mostrar tarjetas, agregar,
+        # ir a pagar), el texto es para el cliente ("La más barata es…") y sí se muestra.
         texto_turno = "".join(b.text for b in response.content if b.type == "text").strip()
-        if texto_turno and not tool_uses and response.stop_reason != "refusal":
+        busca = any(b.name in HERRAMIENTAS_SILENCIOSAS for b in tool_uses)
+        if texto_turno and not busca and response.stop_reason != "refusal":
             respuesta += texto_turno
             yield _sse({"type": "text", "text": texto_turno})
         if response.stop_reason in ("refusal", "max_tokens") or not tool_uses:
@@ -496,18 +517,25 @@ async def _conversar(ses: dict, texto: str, ctx: dict | None = None):
 
         resultados = []
         for b in tool_uses:
+            args = b.input if isinstance(b.input, dict) else {}
             try:
-                contenido, ev = await _ejecutar(b.name, b.input if isinstance(b.input, dict) else {}, ses)
+                contenido, ev = await _ejecutar(b.name, args, ses)
+                reg["herramientas"].append({"nombre": b.name, "args": args})
                 if ev:
                     yield _sse(ev)
+                    if ev["type"] in ("carrito", "carrito_actualizar", "checkout"):
+                        tipo = {"carrito": "agregar_carrito", "carrito_actualizar": "actualizar_carrito", "checkout": "checkout"}[ev["type"]]
+                        registro.evento(sid, tipo, {"items": [(x.get("nombre"), x.get("qty")) for x in ev.get("items", [])]})
                 resultados.append({"type": "tool_result", "tool_use_id": b.id, "content": contenido})
             except Exception as e:  # el error vuelve al modelo para que lo resuelva
+                reg["herramientas"].append({"nombre": b.name, "args": args, "error": str(e)[:300]})
                 resultados.append({"type": "tool_result", "tool_use_id": b.id, "is_error": True, "content": str(e)})
         messages.append({"role": "user", "content": resultados})
         yield _sse({"type": "separador"})
 
     if respuesta.strip():
         ses["transcript"].append({"rol": "bot", "texto": respuesta.strip()})
+    registro.mensaje_bot(sid, respuesta.strip(), reg["herramientas"], reg["llamadas"], reg["tin"], reg["tout"], reg["costo"])
     yield _sse({"type": "fin"})
 
 
@@ -526,15 +554,49 @@ async def chat(req: Request):
             yield _sse({"type": "error", "text": "Falta configurar ANTHROPIC_API_KEY en el archivo .env del servidor."})
             yield _sse({"type": "fin"})
             return
+        registro.asegurar_conversacion(sid, MODEL, ctx)
+        registro.mensaje_cliente(sid, texto, ctx)
         try:
-            async for chunk in _conversar(ses, texto, ctx):
+            async for chunk in _conversar(sid, ses, texto, ctx):
                 yield chunk
         except Exception:
             logging.exception("Error en /api/chat")
+            registro.evento(sid, "error", {"donde": "servidor"})
             yield _sse({"type": "error", "text": "Algo salió mal de mi lado. Probá de nuevo o escribinos por WhatsApp."})
             yield _sse({"type": "fin"})
 
     return StreamingResponse(gen(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
+
+
+EVENTOS_WIDGET = {"chat_abierto", "tarjeta_click", "agregar_click", "compra", "feedback", "error_widget"}
+
+
+@app.post("/api/evento")
+async def evento(req: Request):
+    """Eventos que ve el widget y el servidor no: chat abierto, clic en tarjeta, compra confirmada, 👍/👎."""
+    body = await req.json()
+    tipo = str(body.get("tipo") or "")
+    sid = str(body.get("sesion") or "")[:64]
+    if tipo not in EVENTOS_WIDGET or not sid:
+        return {"ok": False}
+    datos = body.get("datos") if isinstance(body.get("datos"), dict) else {}
+    datos = {k: (str(v)[:300] if not isinstance(v, (int, float, bool)) else v) for k, v in list(datos.items())[:12]}
+    return {"ok": registro.evento(sid, tipo, datos)}
+
+
+@app.get("/api/reporte")
+async def reporte(dias: int = 30):
+    return registro.resumen(max(1, min(dias, 365)))
+
+
+@app.get("/api/transcripcion")
+async def transcripcion(sesion: str):
+    return registro.transcripcion(sesion[:64])
+
+
+@app.get("/reporte")
+async def reporte_html():
+    return FileResponse(ROOT / "static" / "reporte.html")
 
 
 @app.get("/api/historial")

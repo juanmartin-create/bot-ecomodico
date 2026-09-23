@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Modi · Reporte</title>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root { --azul:#2274A5; --azul-osc:#1a5e8a; --azul-claro:#EBF4FB; --fondo:#FAFAFA; --borde:#E0E0E0; --texto:#444; --fuerte:#222; --muted:#646464; --verde:#1b5e20; --rojo:#7f0000; --sombra:0 2px 8px rgba(0,0,0,.08); }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:Outfit,system-ui,sans-serif; background:var(--fondo); color:var(--texto); line-height:1.5; }
+  header { background:var(--azul); color:#fff; padding:14px 16px; }
+  header .in { max-width:1000px; margin:0 auto; display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+  header img { width:40px; height:40px; border-radius:50%; box-shadow:0 0 0 2px #fff; }
+  header b { font-size:18px; font-weight:600; }
+  header select { margin-left:auto; font:inherit; border:0; border-radius:30px; padding:6px 12px; }
+  main { max-width:1000px; margin:0 auto; padding:24px 16px 48px; display:flex; flex-direction:column; gap:24px; }
+  h2 { font-size:20px; font-weight:600; color:var(--fuerte); margin:0; padding-bottom:6px; border-bottom:2px solid var(--azul); align-self:flex-start; }
+  section { display:flex; flex-direction:column; gap:12px; }
+  .kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; }
+  .kpi { background:#fff; border-radius:12px; box-shadow:var(--sombra); padding:14px 16px; }
+  .kpi .v { font-size:26px; font-weight:700; color:var(--azul); font-variant-numeric:tabular-nums; }
+  .kpi .l { font-size:13px; color:var(--muted); }
+  .kpi .s { font-size:12px; color:var(--muted); }
+  .embudo { display:flex; flex-direction:column; gap:6px; background:#fff; border-radius:12px; box-shadow:var(--sombra); padding:16px; }
+  .paso { display:grid; grid-template-columns:190px 1fr 90px; gap:10px; align-items:center; font-size:14px; }
+  .paso .bar { height:18px; background:var(--azul-claro); border-radius:4px; overflow:hidden; }
+  .paso .bar i { display:block; height:100%; background:var(--azul); border-radius:4px; }
+  .paso .n { text-align:right; font-variant-numeric:tabular-nums; font-weight:600; color:var(--fuerte); }
+  table { width:100%; border-collapse:collapse; background:#fff; border-radius:12px; box-shadow:var(--sombra); overflow:hidden; font-size:14px; }
+  th, td { padding:9px 12px; text-align:left; border-bottom:1px solid var(--borde); }
+  th { font-size:12px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); background:#F5F5F5; }
+  tr:last-child td { border-bottom:0; }
+  td.n { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  a { color:var(--azul); font-weight:500; cursor:pointer; }
+  .tr { background:#fff; border-radius:12px; box-shadow:var(--sombra); padding:16px; display:none; flex-direction:column; gap:8px; }
+  .tr.abierto { display:flex; }
+  .m { max-width:80%; padding:8px 12px; border-radius:12px; font-size:14px; white-space:pre-wrap; }
+  .m.cliente { background:var(--azul); color:#fff; align-self:flex-end; }
+  .m.bot { background:#fff; border:1px solid var(--borde); align-self:flex-start; }
+  .m small { display:block; opacity:.7; font-size:11px; margin-top:4px; }
+  .ev { font-size:12px; color:var(--muted); align-self:center; }
+  .vacio { color:var(--muted); font-size:14px; }
+  @media (max-width:600px) { .paso { grid-template-columns:1fr; gap:4px; } .paso .n { text-align:left; } }
+</style>
+</head>
+<body>
+<header><div class="in"><img alt="" src="/modi.png"><b>Modi · Reporte de conversaciones</b>
+  <select id="dias" aria-label="Período"><option value="7">Últimos 7 días</option><option value="30" selected>Últimos 30 días</option><option value="90">Últimos 90 días</option><option value="365">Último año</option></select>
+</div></header>
+<main>
+  <section>
+    <h2>Embudo</h2>
+    <p class="vacio" id="nota">Cada paso cuenta conversaciones (personas que escribieron al menos un mensaje). La compra se detecta cuando el cliente llega a la página de su pedido con el chat instalado.</p>
+    <div class="embudo" id="embudo"></div>
+  </section>
+  <section>
+    <h2>Calidad y costo</h2>
+    <div class="kpis" id="kpis"></div>
+  </section>
+  <section>
+    <h2>Herramientas más usadas</h2>
+    <table><thead><tr><th>Herramienta</th><th class="n">Veces</th></tr></thead><tbody id="herr"></tbody></table>
+  </section>
+  <section>
+    <h2>Últimas conversaciones</h2>
+    <table><thead><tr><th>Inicio</th><th>Página</th><th class="n">Mensajes</th><th class="n">Costo</th><th></th></tr></thead><tbody id="ultimas"></tbody></table>
+    <div class="tr" id="tr"></div>
+  </section>
+</main>
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var usd = function (v) { return "US$" + (v || 0).toLocaleString("es-AR", { minimumFractionDigits: 3, maximumFractionDigits: 3 }); };
+  var ars = function (v) { return "$" + Math.round(v || 0).toLocaleString("es-AR"); };
+  var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); };
+
+  async function cargar() {
+    var r = await fetch("/api/reporte?dias=" + $("dias").value); var d = await r.json();
+    var e = d.embudo, base = Math.max(e.abrieron_chat, e.conversaciones, 1);
+    var pasos = [["Abrieron el chat", e.abrieron_chat], ["Escribieron", e.conversaciones], ["Agregaron al carrito", e.agregaron_carrito], ["Llegaron al checkout", e.llegaron_checkout], ["Compraron", e.compraron]];
+    $("embudo").innerHTML = pasos.map(function (p) {
+      return '<div class="paso"><span>' + p[0] + '</span><div class="bar"><i style="width:' + (100 * p[1] / base) + '%"></i></div><span class="n">' + p[1] + "</span></div>";
+    }).join("") + (e.ventas_ars ? '<div class="paso"><span>Ventas detectadas</span><span></span><span class="n">' + ars(e.ventas_ars) + "</span></div>" : "");
+    var c = d.calidad, k = d.costo;
+    var kpis = [
+      [c.mensajes_por_conversacion, "mensajes por conversación", c.mensajes_cliente + " mensajes de clientes"],
+      [e.pct_agregaron + "%", "agregaron al carrito", e.pct_checkout + "% llegó al checkout"],
+      [e.pct_compraron + "%", "compraron", ""],
+      ["👍 " + c.feedback_positivo + " · 👎 " + c.feedback_negativo, "feedback en respuestas", ""],
+      [c.errores, "errores de API", c.derivaciones_whatsapp + " derivaciones a WhatsApp"],
+      [usd(k.total_usd), "costo total", usd(k.por_conversacion_usd) + " por conversación" + (k.por_venta_usd != null ? " · " + usd(k.por_venta_usd) + " por venta" : "")]
+    ];
+    $("kpis").innerHTML = kpis.map(function (x) { return '<div class="kpi"><div class="v">' + x[0] + '</div><div class="l">' + x[1] + '</div><div class="s">' + x[2] + "</div></div>"; }).join("");
+    $("herr").innerHTML = c.herramientas.length ? c.herramientas.map(function (h) { return "<tr><td>" + esc(h.nombre) + '</td><td class="n">' + h.n + "</td></tr>"; }).join("") : '<tr><td colspan="2" class="vacio">Todavía no hay datos.</td></tr>';
+    $("ultimas").innerHTML = d.ultimas.length ? d.ultimas.map(function (u) {
+      return "<tr><td>" + esc(u.inicio.replace("T", " ")) + "</td><td>" + esc(u.pagina_inicio || "") + '</td><td class="n">' + u.mensajes + '</td><td class="n">' + usd(u.costo_usd) + '</td><td><a data-s="' + esc(u.sesion) + '">Ver</a></td></tr>';
+    }).join("") : '<tr><td colspan="5" class="vacio">Todavía no hay conversaciones.</td></tr>';
+  }
+  $("ultimas").addEventListener("click", async function (ev) {
+    var a = ev.target.closest("a[data-s]"); if (!a) return;
+    var r = await fetch("/api/transcripcion?sesion=" + encodeURIComponent(a.dataset.s)); var t = await r.json();
+    var items = t.mensajes.map(function (m) { return { ts: m.ts, html: '<div class="m ' + m.rol + '">' + esc(m.texto) + (m.rol === "bot" ? "<small>" + esc((JSON.parse(m.herramientas || "[]")).map(function (h) { return h.nombre + (h.error ? " ⚠️" : ""); }).join(", ")) + (m.error ? " · error: " + esc(m.error) : "") + " · " + usd(m.costo_usd) + "</small>" : (m.paso ? "<small>checkout: " + esc(m.paso) + "</small>" : "")) + "</div>" }; })
+      .concat(t.eventos.map(function (e) { return { ts: e.ts, html: '<div class="ev">' + esc(e.ts.slice(11)) + " · " + esc(e.tipo) + " " + esc(e.datos) + "</div>" }; }))
+      .sort(function (x, y) { return x.ts < y.ts ? -1 : 1; });
+    var tr = $("tr"); tr.className = "tr abierto"; tr.innerHTML = items.map(function (i) { return i.html; }).join("") || '<span class="vacio">Sin mensajes.</span>';
+    tr.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+  $("dias").addEventListener("change", cargar);
+  cargar();
+})();
+</script>
+</body>
+</html>
