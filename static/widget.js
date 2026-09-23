@@ -245,7 +245,7 @@
         ok.push(x);
       } catch (e) { mal.push(x); }
     }
-    if (ok.length) burbujaBot("✅ Agregué al carrito: " + ok.map(function (x) { return x.qty + " × " + x.nombre; }).join(", ") + ".");
+    if (ok.length) burbujaBot("✅ Agregué al carrito: " + ok.map(function (x) { return x.qty + " × " + x.nombre; }).join(", ") + ". Si no lo ves en el carrito, recargá la página.");
     if (mal.length) { var e = burbujaBot("❌ No pude agregar: " + mal.map(function (x) { return "[" + x.nombre + "](" + x.url + ")"; }).join(", ")); e.className = "m error"; }
   }
 
@@ -311,7 +311,7 @@
         hechos.push(c.qty === 0 ? "quité " + it.name : it.name + " → " + c.qty);
       } catch (err) { mal.push(c); }
     }
-    if (hechos.length) burbujaBot("✅ Listo: " + hechos.join(", ") + ".");
+    if (hechos.length) burbujaBot("✅ Listo: " + hechos.join(", ") + ". Si no ves el cambio en el carrito, recargá la página.");
     if (mal.length) { var e2 = burbujaBot("❌ No pude cambiar: " + mal.map(function (x) { return x.nombre; }).join(", ")); e2.className = "m error"; }
   }
 
