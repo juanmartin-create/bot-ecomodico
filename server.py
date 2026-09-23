@@ -467,16 +467,6 @@ async def avatar():
     return FileResponse(ROOT / "static" / "modi.png", media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
 
 
-@app.get("/favicon.ico")
-async def favicon():
-    return FileResponse(ROOT / "static" / "favicon.ico", media_type="image/x-icon", headers={"Cache-Control": "public, max-age=86400"})
-
-
-@app.get("/apple-touch-icon.png")
-async def apple_icon():
-    return FileResponse(ROOT / "static" / "apple-touch-icon.png", media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
-
-
 @app.get("/widget.js")
 async def widget():
     return FileResponse(ROOT / "static" / "widget.js", media_type="application/javascript")
