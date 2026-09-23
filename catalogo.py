@@ -5,6 +5,7 @@ cada página renderizada trae el estado completo en `window.__SERVER_DATA__`.
 Leemos eso: es la misma información que ve el cliente en la web, en tiempo real.
 """
 
+import asyncio
 import json
 import re
 import time
@@ -24,6 +25,11 @@ _SERVER_DATA = re.compile(r"window\.__SERVER_DATA__\s*=\s*(.*?)</script>", re.S)
 _CACHE: dict[str, tuple[float, dict]] = {}
 CACHE_TTL = 300  # 5 min: precios y stock cambian, pero no cada segundo
 
+# Regla de envío gratis de la tienda (orderTotalGoalProgressConfig). Se actualiza con
+# lo que dice el sitio en cada página que leemos; estos son los valores de respaldo.
+ENVIO_GRATIS = {"coleccion": "57", "meta": 75000,
+                "descripcion": "Envío gratis para CABA y AMBA (no incluye productos de Electro y Hogar)"}
+
 _http = httpx.AsyncClient(headers=HEADERS, timeout=15, follow_redirects=True)
 
 
@@ -36,7 +42,12 @@ async def _server_data(path: str) -> dict:
     m = _SERVER_DATA.search(r.text)
     if not m:
         raise RuntimeError(f"No se encontró __SERVER_DATA__ en {path}")
-    data = json.loads(m.group(1).strip().rstrip(";"))["_resolvedData"]
+    todo = json.loads(m.group(1).strip().rstrip(";"))
+    cfg = todo.get("orderTotalGoalProgressConfig") or {}
+    if cfg.get("collectionId") and cfg.get("orderTotalGoal"):
+        ENVIO_GRATIS.update(coleccion=str(cfg["collectionId"]), meta=int(float(cfg["orderTotalGoal"])),
+                            descripcion=cfg.get("description") or ENVIO_GRATIS["descripcion"])
+    data = todo["_resolvedData"]
     _CACHE[path] = (time.time(), data)
     return data
 
@@ -53,6 +64,8 @@ def _resumen(p: dict) -> dict:
         img = sq.get("fullUrl") or imgs[0].get("fullUrl")
     prev = precio.get("prevPrice") or 0
     actual = precio.get("price") or 0
+    disponible = stock.get("availability") == "InStock" and p.get("buyable", True)
+    qty = None if stock.get("infiniteQty") else stock.get("qty")
     return {
         "id": p["id"],
         "variante_id": v.get("id"),
@@ -62,8 +75,10 @@ def _resumen(p: dict) -> dict:
         "precio": actual,
         "precio_anterior": prev if prev > actual else None,
         "descuento_pct": round(precio.get("discountPct") or 0) or None,
-        "stock": stock.get("qty"),
-        "disponible": stock.get("availability") == "InStock" and p.get("buyable", True),
+        "stock": qty if disponible else 0,
+        "disponible": disponible,
+        "max_por_compra": stock.get("maxBuyableQty"),
+        "envio_gratis": ENVIO_GRATIS["coleccion"] in [str(c) for c in p.get("collectionsIds") or []],
         "url": f"{BASE}/p/{p['urlName']}/{p['id']}",
         "imagen": img,
     }
@@ -74,13 +89,33 @@ async def buscar_productos(consulta: str, orden: str = "relevancia", limite: int
     path = f"/shop/sort-by-{sort}" if sort else "/shop"
     data = await _server_data(f"{path}?search={quote(consulta)}")
     shop = data.get("shop") or {}
-    productos = [_resumen(p) for p in shop.get("products", [])]
-    productos = [p for p in productos if p["disponible"]] + [p for p in productos if not p["disponible"]]
+    todos = [_resumen(p) for p in shop.get("products", [])]
+    con_stock = [p for p in todos if p["disponible"]]
+    sin_stock = [p for p in todos if not p["disponible"]]
+    limite = max(1, min(limite, 12))
+    # Primero lo que se puede comprar. Lo agotado solo si hace falta para completar.
+    productos = con_stock[:limite]
+    if len(productos) < 3:
+        productos += sin_stock[: limite - len(productos)]
     return {
         "consulta": consulta,
-        "total_resultados": (shop.get("pagination") or {}).get("itemsLength", len(productos)),
-        "productos": productos[: max(1, min(limite, 12))],
+        "total_resultados": (shop.get("pagination") or {}).get("itemsLength", len(todos)),
+        "sin_stock_omitidos": max(0, len(sin_stock) - (len(productos) - len(con_stock[:limite]))),
+        "productos": productos,
     }
+
+
+async def buscar_varios(consultas: list[str], orden: str = "relevancia", limite: int = 4) -> dict:
+    """Varias búsquedas en paralelo (ej. una lista de compras)."""
+    consultas = [c.strip() for c in consultas if isinstance(c, str) and c.strip()][:12]
+    resultados = await asyncio.gather(*(buscar_productos(c, orden, limite) for c in consultas), return_exceptions=True)
+    salida = []
+    for consulta, r in zip(consultas, resultados):
+        if isinstance(r, Exception):
+            salida.append({"consulta": consulta, "error": str(r), "productos": []})
+        else:
+            salida.append(r)
+    return {"busquedas": salida}
 
 
 async def ver_producto(url: str) -> dict:

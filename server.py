@@ -24,7 +24,7 @@ import catalogo
 ROOT = Path(__file__).parent
 load_dotenv(ROOT / ".env")
 
-MODEL = os.getenv("ECOMODICO_MODEL", "claude-haiku-4-5")  # el más barato; alcanza para un chat de venta
+MODEL = os.getenv("ECOMODICO_MODEL", "claude-sonnet-5")  # el más barato que completó la venta entera en las pruebas
 EFFORT = os.getenv("ECOMODICO_EFFORT", "low")  # solo aplica a Opus/Sonnet; Haiku 4.5 no acepta effort
 MAX_TURNS_PER_REQUEST = 6
 MAX_MESSAGES = 60
@@ -48,7 +48,11 @@ Cómo trabajás:
 - Cuando recomiendes productos, llamá a `mostrar_productos` con los 1 a 4 mejores para que aparezcan como tarjetas con foto, precio y botón de compra. En el texto no repitas toda la ficha: decí en una línea por qué conviene cada uno.
 - Cada vez que nombres un producto en el texto, poné su nombre como link: [Nombre corto](url). Así el cliente siempre puede abrirlo, aunque no vea las tarjetas.
 - Cuando el cliente diga que lo quiere ("me lo llevo", "agregalo", "dale", "quiero 2"), usá `agregar_al_carrito` con los ids y cantidades. Después de recomendar, cerrá ofreciendo agregarlo: "¿Te lo agrego al carrito?". Nunca digas que lo agregaste si no llamaste a la herramienta.
-- Cada mensaje del cliente puede traer un bloque <contexto_web> con la página donde está, el paso del checkout y lo que tiene en el carrito. Lo genera el sitio, no el cliente: usalo para saber dónde está parado, pero no lo repitas entero.
+- Cada mensaje del cliente puede traer un bloque <contexto_web> con la página donde está, el paso del checkout, lo que tiene en el carrito y el estado del envío gratis. Lo genera el sitio, no el cliente. Usalo para saber dónde está parado, pero no lo repitas entero ni menciones el carrito si no viene al caso: la persona ya sabe qué tiene.
+- Cuentas: nunca sumes, restes ni compares montos por tu cuenta. Los totales, lo que falta para el envío gratis y qué productos califican ya vienen calculados en <contexto_web> y en los resultados de las herramientas; copiá esos números. Si no tenés el número, no lo inventes.
+- Envío gratis: solo lo alcanzan los productos marcados "envio_gratis": true (Electro y Hogar no cuentan). Si el contexto dice "YA LO TIENE", decilo así; si dice cuánto falta, usá ese monto exacto.
+- Lista de compras o "carrito grande": pedile la lista (o proponé rubros: almacén, limpieza, bebidas, cuidado personal) y usá `buscar_varios` con un término simple por producto. Recomendá una opción por producto (mejor precio con stock), mostralas todas con `mostrar_productos` y ofrecé agregar todo junto con `agregar_al_carrito`. Si algún producto de la lista no aparece o no tiene stock, decilo en ese mismo mensaje y proponé una alternativa.
+- Productos sin stock: no los recomiendes. Si un resultado dice "disponible": false, mencionalo solo si el cliente preguntó por ese producto puntual, y ofrecé la alternativa con stock.
 - Para cambiar cantidades o quitar algo del carrito, usá `actualizar_carrito` (cantidad 0 = quitar). Antes de quitar, si no es obvio, confirmá qué producto. Si en un mismo mensaje el cliente pregunta algo y además pide un cambio ("¿qué tengo? dejame una sola"), respondé y hacé el cambio.
 - Cuando el cliente quiere pagar ("finalizar", "cómo pago", "listo, eso es todo"), repasá el carrito en una línea (cantidad de productos y total), recordá si le falta poco para el envío gratis, y usá `ir_a_pagar`.
 - En el checkout acompañalo paso a paso: 1) Ingresar: puede comprar como invitado, sin crear cuenta. 2) Contacto: nombre, email y teléfono (el email es para el seguimiento). 3) Envío: a domicilio o retiro gratis en Av. del Campo 1500, Villa Urquiza. 4) Pago: con Mercado Pago (tarjetas, débito, dinero en cuenta); con transferencia hay descuento desde $150.000; el cupón se carga en el resumen. Cuando pasa a la página de Mercado Pago, ya no lo ves: si tiene problemas ahí, derivá a WhatsApp.
@@ -92,6 +96,19 @@ TOOLS = [
         "eager_input_streaming": True,
     },
     {
+        "name": "buscar_varios",
+        "description": "Busca varios productos a la vez (hasta 12), en paralelo: ideal para una lista de compras (\"yerba, azúcar, fideos, papel higiénico\") o para armar un carrito grande. Devuelve hasta 3 opciones con stock por cada término.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"consultas": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 12,
+                                         "description": "Un término simple por producto, como en el buscador de la tienda."},
+                           "orden": {"type": "string", "enum": list(catalogo.SORTS), "description": "Usá menor_precio si el cliente pide lo más barato."}},
+            "required": ["consultas"],
+            "additionalProperties": False,
+        },
+        "eager_input_streaming": True,
+    },
+    {
         "name": "ver_producto",
         "description": "Trae la ficha completa de un producto (descripción, atributos, productos relacionados) a partir de su URL.",
         "input_schema": {
@@ -104,10 +121,10 @@ TOOLS = [
     },
     {
         "name": "mostrar_productos",
-        "description": "Muestra al cliente tarjetas de producto (foto, precio, botón de compra) en el chat. Pasá los ids de 1 a 4 productos que ya aparecieron en buscar_productos o ver_producto, en orden de recomendación.",
+        "description": "Muestra al cliente tarjetas de producto (foto, precio, botón de compra) en el chat. Pasá los ids de 1 a 4 productos (hasta 8 si es una lista de compras) que ya aparecieron en buscar_productos o ver_producto, en orden de recomendación.",
         "input_schema": {
             "type": "object",
-            "properties": {"ids": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 4}},
+            "properties": {"ids": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 8}},
             "required": ["ids"],
             "additionalProperties": False,
         },
@@ -203,6 +220,17 @@ async def _ejecutar(nombre: str, args: dict, ses: dict) -> tuple[str, dict | Non
             ses["vistos"][p["id"]] = p
         r["productos"] = [_para_modelo(p) for p in r["productos"]]
         return json.dumps(r, ensure_ascii=False), {"type": "estado", "text": f"Busqué “{args['consulta']}”"}
+    if nombre == "buscar_varios":
+        consultas = args.get("consultas")
+        if not isinstance(consultas, list) or not any(isinstance(c, str) and c.strip() for c in consultas):
+            raise ValueError("'consultas' tiene que ser una lista de textos.")
+        orden = args.get("orden", "relevancia")
+        r = await catalogo.buscar_varios(consultas, orden if orden in catalogo.SORTS else "relevancia")
+        for b in r["busquedas"]:
+            for p in b.get("productos", []):
+                ses["vistos"][p["id"]] = p
+            b["productos"] = [_para_modelo(p) for p in b.get("productos", [])]
+        return json.dumps(r, ensure_ascii=False), {"type": "estado", "text": f"Busqué {len(r['busquedas'])} productos"}
     if nombre == "ver_producto":
         if not isinstance(args.get("url"), str):
             raise ValueError("Falta 'url' (texto).")
@@ -215,7 +243,7 @@ async def _ejecutar(nombre: str, args: dict, ses: dict) -> tuple[str, dict | Non
         ids = args.get("ids")
         if not isinstance(ids, list) or not all(isinstance(i, str) for i in ids):
             raise ValueError("'ids' tiene que ser una lista de strings.")
-        items = [ses["vistos"][i] for i in ids[:4] if i in ses["vistos"]]
+        items = [ses["vistos"][i] for i in ids[:8] if i in ses["vistos"]]
         faltan = [i for i in ids if i not in ses["vistos"]]
         msg = f"Mostradas {len(items)} tarjetas."
         if faltan:
@@ -235,19 +263,29 @@ async def _ejecutar(nombre: str, args: dict, ses: dict) -> tuple[str, dict | Non
             if not p["disponible"]:
                 faltan.append({"id": p["id"], "motivo": "sin stock"})
                 continue
+            pedida = qty
             if p.get("stock") is not None:
                 qty = min(qty, p["stock"])
+            if p.get("max_por_compra"):  # límite por compra que fija la tienda (ej. 10 packs de pañales)
+                qty = min(qty, p["max_por_compra"])
             pedido.append({"productId": p["id"], "variantId": p["variante_id"], "qty": qty,
-                           "nombre": p["nombre"], "url": p["url"], "precio": p["precio"]})
+                           "nombre": p["nombre"], "url": p["url"], "precio": p["precio"],
+                           "envio_gratis": bool(p.get("envio_gratis")),
+                           "ajustado": f"pediste {pedida}, el máximo es {qty}" if qty < pedida else None})
         if not pedido:
             raise ValueError(f"Nada para agregar. Revisá ids/stock: {faltan}")
         carrito = ses.setdefault("carrito", {})  # así un "agregá y llevame a pagar" funciona en el mismo turno
         for x in pedido:
             previo = carrito.get(x["productId"], {}).get("cantidad", 0) or 0
-            carrito[x["productId"]] = {"producto_id": x["productId"], "nombre": x["nombre"],
+            carrito[x["productId"]] = {"producto_id": x["productId"], "nombre": x["nombre"], "envio_gratis": x["envio_gratis"],
                                        "cantidad": previo + x["qty"], "total": x["precio"] * (previo + x["qty"])}
         total = sum(x["precio"] * x["qty"] for x in pedido)
-        msg = f"Enviado al carrito del cliente: {[(x['nombre'], x['qty']) for x in pedido]}. Subtotal de lo agregado: ${total:,.0f}".replace(",", ".")
+        msg = (f"Enviado al carrito del cliente: {[(x['nombre'], x['qty']) for x in pedido]}. Subtotal de lo agregado: {_pesos(total)}. "
+               f"Carrito ahora: {_pesos(sum(_num(c.get('total')) for c in carrito.values()))}. "
+               + resumen_envio_gratis(list(carrito.values()))["texto"])
+        ajustes = [f"{x['nombre']}: {x['ajustado']}" for x in pedido if x["ajustado"]]
+        if ajustes:
+            msg += f" Cantidades ajustadas: {ajustes}"
         if faltan:
             msg += f". No se agregaron: {faltan}"
         return msg, {"type": "carrito", "items": pedido}
@@ -318,30 +356,74 @@ PASOS_CHECKOUT = {
 }
 
 
+def _pesos(n) -> str:
+    """$92.617, formato es-AR. El modelo recibe los números ya formateados para no hacer cuentas."""
+    try:
+        return "$" + f"{int(round(float(n))):,}".replace(",", ".")
+    except (TypeError, ValueError):
+        return "$0"
+
+
+def _num(v) -> float:
+    try:
+        return float(v or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def resumen_envio_gratis(carrito: list) -> dict:
+    """La regla la calcula el código, no el modelo: subtotal de los productos que califican
+    (colección de envío gratis de la tienda) contra la meta. Devuelve texto listo para el prompt."""
+    meta = catalogo.ENVIO_GRATIS["meta"]
+    califica = sum(_num(i.get("total")) for i in carrito if isinstance(i, dict) and i.get("envio_gratis"))
+    no_califica = [str(i.get("nombre"))[:40] for i in carrito if isinstance(i, dict) and not i.get("envio_gratis")]
+    if not carrito:
+        texto = f"Envío gratis (CABA y AMBA): se alcanza con {_pesos(meta)} en productos que califican. El carrito está vacío."
+    elif califica >= meta:
+        texto = f"Envío gratis (CABA y AMBA): YA LO TIENE. Los productos que califican suman {_pesos(califica)}, por encima de los {_pesos(meta)}."
+    elif califica > 0:
+        texto = (f"Envío gratis (CABA y AMBA): todavía NO. Los productos que califican suman {_pesos(califica)}; "
+                 f"le faltan {_pesos(meta - califica)} para llegar a {_pesos(meta)}.")
+    else:
+        texto = f"Envío gratis (CABA y AMBA): ningún producto del carrito califica (la regla excluye Electro y Hogar). Meta: {_pesos(meta)}."
+    if no_califica:
+        texto += f" No califican: {', '.join(no_califica[:5])}."
+    return {"alcanzado": califica >= meta, "califica": califica, "faltan": max(0.0, meta - califica), "texto": texto}
+
+
 def _texto_contexto(ctx: dict) -> str:
-    """Resume lo que el widget ve en la página del cliente (página, paso, carrito)."""
+    """Resume lo que el widget ve en la página del cliente (página, paso, carrito).
+    Todas las cuentas vienen hechas: el modelo solo tiene que leerlas."""
     if not isinstance(ctx, dict):
         return ""
     lineas = []
     pagina = str(ctx.get("pagina") or "")[:200]
     paso = str(ctx.get("paso") or "")[:40]
+    producto = str(ctx.get("producto_actual") or "")
     if paso:
         lineas.append(f"Está en el {PASOS_CHECKOUT.get(paso, 'checkout, paso ' + paso)}.")
-    elif pagina:
-        lineas.append(f"Está mirando {pagina}.")
+    elif producto.startswith("https://ecomodico.com/p/"):
+        lineas.append(f"Está mirando la ficha de un producto: {producto} (si pregunta por \"este producto\", es ese: usá ver_producto con esa URL).")
+    elif pagina and pagina not in ("/", "/shop"):
+        lineas.append(f"Está en la página {pagina}.")
     if ctx.get("en_tienda") is False:
         lineas.append("El chat NO está dentro de ecomodico.com: no puede tocar el carrito ni ir a pagar desde acá.")
     carrito = ctx.get("carrito")
     if isinstance(carrito, list):
+        carrito = [i for i in carrito[:30] if isinstance(i, dict)]
         if carrito:
             items = "; ".join(
-                f"{i.get('cantidad')} × {str(i.get('nombre'))[:80]} (id {i.get('producto_id')}, ${i.get('total')}"
+                f"{i.get('cantidad')} × {str(i.get('nombre'))[:80]} = {_pesos(i.get('total'))} (id {i.get('producto_id')}"
+                + (", califica envío gratis" if i.get("envio_gratis") else ", NO califica envío gratis")
                 + (f", url {i['url']}" if str(i.get("url") or "").startswith("https://ecomodico.com/p/") else "") + ")"
-                for i in carrito[:30] if isinstance(i, dict)
+                for i in carrito
             )
-            lineas.append(f"Carrito: {items}. Total: ${ctx.get('total')}.")
+            unidades = int(sum(_num(i.get("cantidad")) for i in carrito))
+            lineas.append(f"Carrito: {len(carrito)} producto(s), {unidades} unidad(es), total {_pesos(ctx.get('total'))}. Detalle: {items}.")
         else:
             lineas.append("Carrito vacío.")
+        lineas.append(resumen_envio_gratis(carrito)["texto"])
+        lineas.append("Estos números ya están calculados: usalos tal cual, no hagas cuentas propias.")
     return "<contexto_web>\n" + "\n".join(lineas) + "\n</contexto_web>" if lineas else ""
 
 

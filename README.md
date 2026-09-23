@@ -33,16 +33,20 @@ Para eso el servidor tiene que estar publicado (Render, Railway, un VPS). Antes 
 
 ## Configuración (.env)
 
-- `ECOMODICO_MODEL`: por defecto `claude-haiku-4-5` (el más barato). Para más calidad: `claude-sonnet-5` u `claude-opus-5`.
+- `ECOMODICO_MODEL`: por defecto `claude-sonnet-5`, el más barato que completó la venta entera en las pruebas. `claude-haiku-4-5` cuesta la mitad pero falla en pedidos compuestos ("¿qué tengo? dejame una sola") y a veces no lleva a pagar. `claude-opus-5` es el más preciso (3× Sonnet).
 - `ECOMODICO_EFFORT`: `low` por defecto. Solo aplica a Sonnet/Opus (Haiku 4.5 no lo acepta).
 - Con Sonnet/Opus se activa el fallback del servidor (`fallbacks: "default"`): si el modelo rechaza un pedido, la API lo reintenta con otro modelo.
 
-## Costos (medidos el 2026-09-22, conversación de 5 mensajes)
+## Qué calcula el código y qué decide el modelo
+
+Los montos nunca los calcula el modelo. El widget manda con cada mensaje la página, el paso del checkout y el carrito (con qué productos califican para envío gratis, según la colección que publica la tienda), y el servidor arma el resumen ya calculado: total, unidades, y si el envío gratis está alcanzado o cuánto falta. El modelo solo lee esos números.
+
+## Costos (medidos el 2026-09-23, venta completa de 5 mensajes)
 
 | Modelo | Por conversación | Cada 1.000 conversaciones |
 |---|---|---|
-| Haiku 4.5 (default) | US$ 0,016 | US$ 16 |
-| Sonnet 5 | US$ 0,049 | US$ 49 |
-| Opus 5 | US$ 0,134 | US$ 134 |
+| Haiku 4.5 | US$ 0,031 | US$ 31 |
+| Sonnet 5 (default) | US$ 0,058 | US$ 58 |
+| Opus 5 | US$ 0,162 | US$ 162 |
 
 El gasto real queda anotado en `uso.jsonl` (una línea por llamada a la API).

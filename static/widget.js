@@ -230,16 +230,28 @@
 
   // Lo que el bot "ve" de la página: dónde está el cliente y qué tiene en el carrito.
   // Nunca se leen campos de formularios (datos personales, tarjeta, etc.).
+  // Regla de envío gratis tal como la publica la tienda en cada página (colección + meta).
+  function reglaEnvioGratis() {
+    try {
+      var c = (window.__SERVER_DATA__ || {}).orderTotalGoalProgressConfig || {};
+      return { coleccion: String(c.collectionId || "57"), meta: Number(c.orderTotalGoal || 75000) };
+    } catch (e) { return { coleccion: "57", meta: 75000 }; }
+  }
   function contexto() {
     var ctx = { pagina: location.pathname, paso: pasoActual(), en_tienda: !!tiendaShop() };
-    var o = ordenActual();
+    var mp = location.pathname.match(/^\/p\/[^/]+\/[0-9a-f-]{36}/);
+    if (mp) ctx.producto_actual = location.origin + mp[0];
+    var o = ordenActual(), regla = reglaEnvioGratis();
     if (o && o.items) {
       ctx.carrito = o.items.map(function (it) {
         var cd = it.cartData || {};
+        var cols = (cd.collectionsIds || []).map(String);
         return { producto_id: cd.productId, nombre: it.name, cantidad: it.qty, precio: it.finalPrice, total: it.finalTotal,
+                 envio_gratis: cols.indexOf(regla.coleccion) !== -1,
                  url: cd.urlName && cd.productId ? location.origin + "/p/" + cd.urlName + "/" + cd.productId : null };
       });
       ctx.total = o.total;
+      ctx.envio_gratis_meta = regla.meta;
     }
     return ctx;
   }
@@ -293,7 +305,7 @@
     items.forEach(function (p) {
       var d = document.createElement("div"); d.className = "card";
       var st = !p.disponible ? '<span class="stock no">Sin stock</span>'
-        : p.stock != null && p.stock <= 5 ? '<span class="stock poco">⚠️ Últimas ' + p.stock + " unidades</span>"
+        : p.stock != null && p.stock > 0 && p.stock <= 5 ? '<span class="stock poco">⚠️ Últimas ' + p.stock + (p.stock === 1 ? " unidad" : " unidades") + "</span>"
         : '<span class="stock">✅ En stock</span>';
       var link = '<a href="' + esc(p.url) + '" target="_blank" rel="noopener">';
       d.innerHTML =
