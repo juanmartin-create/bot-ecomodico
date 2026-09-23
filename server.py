@@ -44,6 +44,7 @@ Tu trabajo tiene dos partes:
 
 Cómo trabajás:
 - Para cualquier pregunta sobre productos, precios, stock u ofertas, usá `buscar_productos`. Nunca inventes productos, precios ni stock: si no está en los resultados, no existe para vos. Probá con términos más simples o sinónimos si la primera búsqueda no trae nada (ej. "tele" -> "smart tv").
+- No anuncies lo que vas a hacer ("Voy a buscar…", "Busco proteína:"): usá la herramienta directamente y escribí solo la respuesta final para el cliente.
 - Cuando recomiendes productos, llamá a `mostrar_productos` con los 1 a 4 mejores para que aparezcan como tarjetas con foto, precio y botón de compra. En el texto no repitas toda la ficha: decí en una línea por qué conviene cada uno.
 - Cada vez que nombres un producto en el texto, poné su nombre como link: [Nombre corto](url). Así el cliente siempre puede abrirlo, aunque no vea las tarjetas.
 - Cuando el cliente diga que lo quiere ("me lo llevo", "agregalo", "dale", "quiero 2"), usá `agregar_al_carrito` con los ids y cantidades. Después de recomendar, cerrá ofreciendo agregarlo: "¿Te lo agrego al carrito?". Nunca digas que lo agregaste si no llamaste a la herramienta.
@@ -368,10 +369,8 @@ async def _conversar(ses: dict, texto: str, ctx: dict | None = None):
                 cache_control={"type": "ephemeral"},
                 **_opciones_modelo(),
             ) as stream:
-                async for event in stream:
-                    if event.type == "text":
-                        respuesta += event.text
-                        yield _sse({"type": "text", "text": event.text})
+                async for _ in stream:  # consumimos el stream; el texto se decide al final
+                    pass
                 response = await stream.get_final_message()
         except ValueError:
             # JSON de herramienta imposible de parsear: reintentamos el turno.
@@ -399,6 +398,13 @@ async def _conversar(ses: dict, texto: str, ctx: dict | None = None):
         if response.stop_reason == "pause_turn":
             continue
         tool_uses = [b for b in response.content if b.type == "tool_use"]
+        # El texto que acompaña a una llamada a herramienta es el modelo narrando lo que
+        # va a hacer ("Buscá proteína:", "Voy a buscar…"): no se le muestra al cliente.
+        # Solo se muestra la respuesta final, la que no pide más herramientas.
+        texto_turno = "".join(b.text for b in response.content if b.type == "text").strip()
+        if texto_turno and not tool_uses and response.stop_reason != "refusal":
+            respuesta += texto_turno
+            yield _sse({"type": "text", "text": texto_turno})
         if response.stop_reason in ("refusal", "max_tokens") or not tool_uses:
             if tool_uses:  # tool_use cortado sin resultado: no lo dejamos en el historial
                 messages.pop()
@@ -416,7 +422,6 @@ async def _conversar(ses: dict, texto: str, ctx: dict | None = None):
             except Exception as e:  # el error vuelve al modelo para que lo resuelva
                 resultados.append({"type": "tool_result", "tool_use_id": b.id, "is_error": True, "content": str(e)})
         messages.append({"role": "user", "content": resultados})
-        respuesta += "\n\n"
         yield _sse({"type": "separador"})
 
     if respuesta.strip():
