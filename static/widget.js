@@ -159,10 +159,17 @@
   $(".cerrar").onclick = cerrar;
 
   function esc(s) { return s.replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
+  // Solo links reales: fichas /p/<nombre>/<id>, páginas conocidas de la tienda y WhatsApp.
+  // Si el modelo inventa una URL, se muestra el texto sin link.
+  var LINK_OK = /^https:\/\/(ecomodico\.com\/(p\/[^\/\s]+\/[0-9a-f-]{36}|faq|ofertas|shop|contacto-y-reclamos|arrepentimiento-de-compra|politicas-de-envio-y-devolucion|terminos-y-condiciones|mayoristas)\/?$|wa\.me\/\d+$|share\.google\/)/;
   function md(s) {
     return esc(s)
-      .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
-      .replace(/(^|[\s(])(https?:\/\/[^\s<)]+)/g, '$1<a href="$2" target="_blank" rel="noopener">$2</a>')
+      .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, function (_, txt, url) {
+        return LINK_OK.test(url) ? '<a href="' + url + '" target="_blank" rel="noopener">' + txt + "</a>" : "<strong>" + txt + "</strong>";
+      })
+      .replace(/(^|[\s(])(https?:\/\/[^\s<)]+)/g, function (_, pre, url) {
+        return LINK_OK.test(url) ? pre + '<a href="' + url + '" target="_blank" rel="noopener">' + url + "</a>" : pre + url;
+      })
       .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
       .replace(/\n/g, "<br>");
   }
