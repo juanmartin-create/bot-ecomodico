@@ -173,6 +173,10 @@ def _doc(p: dict, pos: int, top: set) -> dict:
     attrs = [a["v"] for a in p.get("attrs") or []
              if a.get("attrKey") and ATRIBUTOS_UTILES.search(normalizar(a["attrKey"]["k"]))
              and isinstance(a.get("v"), str) and normalizar(a["v"]) not in ("si", "no")]
+    # Ley 27.743 (Transparencia Fiscal): hay que mostrar el precio sin impuestos nacionales, como hace la tienda.
+    pv = ((p.get("variants") or [{}])[0].get("pvPrice") or {})
+    imp = (pv.get("ivaTaxPct") or 0) + (pv.get("internalTaxPct") or 0)
+    r["precio_sin_impuestos"] = round(r["precio"] / (1 + imp / 100), 2) if r.get("precio") else None
     r.update(pos=pos, top_ventas=p["id"] in top, cat_hoja=hoja.get("name") or "",
              familia=[c["name"] for c in cats if c is not hoja], atributos=attrs[:6],
              cat_urls={c["name"]: "/" + "/".join(c.get("familyUrlNames") or [c.get("urlName") or ""]) for c in cats})
@@ -437,7 +441,7 @@ def _buscar(grupos: list[list[str]], parcial: bool, oferta: bool, minimo: int | 
 
 def _publico(d: dict) -> dict:
     return {k: d[k] for k in ("id", "variante_id", "nombre", "marca", "precio", "precio_anterior", "descuento_pct",
-                              "disponible", "stock", "max_por_compra", "envio_gratis", "url", "imagen")} | {"categoria": d["cat_hoja"]}
+                              "disponible", "stock", "max_por_compra", "envio_gratis", "url", "imagen")} | {"precio_sin_impuestos": d.get("precio_sin_impuestos")} | {"categoria": d["cat_hoja"]}
 
 
 def _facetas(res: list) -> list[dict]:

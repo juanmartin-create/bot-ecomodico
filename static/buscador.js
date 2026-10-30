@@ -76,6 +76,7 @@
   .off { font-size: 11px; font-weight: 700; color: #fff; background: var(--naranja); border-radius: 4px; padding: 1px 5px; }
   .gratis { font-size: 11px; font-weight: 600; color: var(--verde); }
   .agotado { font-size: 12px; color: #999; }
+  .sinimp { font-size: 11px; color: #888; margin-top: 2px; }
   .add {
     border: 0; background: var(--azul); color: #fff; font-weight: 600; font-size: 13px;
     border-radius: 20px; padding: 8px 14px; cursor: pointer; white-space: nowrap; transition: background .15s, transform .1s;
@@ -118,6 +119,7 @@
   var cache = {};
 
   function pesos(n) { return "$" + Math.round(n).toLocaleString("es-AR"); }
+  function pesos2(n) { return "$" + n.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
   function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
   function sinTildes(s) { return s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase(); }
 
@@ -191,12 +193,13 @@
         (p.precio_anterior ? "<s>" + pesos(p.precio_anterior) + "</s>" : "") +
         (p.descuento_pct ? "<span class='off'>-" + p.descuento_pct + "%</span>" : "") +
         (p.envio_gratis ? "<span class='gratis'>Envío gratis</span>" : "");
+      var sinimp = p.precio_sin_impuestos ? "<div class='sinimp'>Precio sin impuestos nacionales " + pesos2(p.precio_sin_impuestos) + "</div>" : "";
       var boton = p.disponible
         ? "<button class='add' data-i='" + i + "'>Agregar</button>"
         : "<span class='agotado'>Sin stock</span>";
       h += "<a class='fila' href='" + esc(p.url) + "' data-i='" + i + "'>" +
         (p.imagen ? "<img loading='lazy' alt='' src='" + esc(p.imagen) + "'>" : "<span></span>") +
-        "<div><div class='nom'>" + (r.titulo ? esc(p.nombre) : resaltar(p.nombre, r.corregida || q)) + "</div><div class='precio'>" + precio + "</div></div>" + boton + "</a>";
+        "<div><div class='nom'>" + (r.titulo ? esc(p.nombre) : resaltar(p.nombre, r.corregida || q)) + "</div><div class='precio'>" + precio + "</div>" + sinimp + "</div>" + boton + "</a>";
     });
     if (estado === "ia") h += "<div class='esq'></div><div class='esq'></div><div class='esq'></div>";
     h += "</div>";
@@ -414,6 +417,7 @@
   .card .antes s { font-size: 13px; color: #999; }
   .card .ya { font-size: 26px; font-weight: 500; color: var(--azul); line-height: 1.1; }
   .card .gratis { min-height: 16px; }
+  .card .sinimp { font-size: 12px; color: #777; min-height: 15px; }
   .card .add { margin-top: auto; width: 100%; padding: 12px; font-size: 16px; }
   .card .agotado { margin-top: auto; text-align: center; padding: 12px; }
   .paginas { display: flex; justify-content: center; gap: 6px; margin-top: 32px; flex-wrap: wrap; }
@@ -489,6 +493,7 @@
       "<div class='nom'>" + esc(p.nombre) + "</div>" +
       "<div class='antes'>" + antes + "</div>" +
       "<div class='ya'>" + pesos(p.precio) + "</div>" +
+      "<div class='sinimp'>" + (p.precio_sin_impuestos ? "Precio sin impuestos nacionales " + pesos2(p.precio_sin_impuestos) : "") + "</div>" +
       "<div class='gratis'>" + (p.envio_gratis ? "Envío gratis" : "") + "</div>" +
       (p.disponible ? "<button class='add' data-i='" + i + "'>Agregar</button>" : "<span class='agotado'>Sin stock</span>") + "</a>";
   }
