@@ -6,6 +6,7 @@ Levanta:
   POST /api/chat     conversación en streaming (Server-Sent Events)
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -19,6 +20,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 
+import buscador
 import catalogo
 import registro
 
@@ -37,6 +39,11 @@ app = FastAPI(title="Ecomodico Bot")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 registro.iniciar()
+
+
+@app.on_event("startup")
+async def _arranque():
+    asyncio.create_task(buscador.refrescar_siempre())  # índice del buscador, renovado cada hora
 
 CONOCIMIENTO = (ROOT / "conocimiento.md").read_text(encoding="utf-8")
 METODO_VENTA = (ROOT / "metodo_venta.md").read_text(encoding="utf-8")
@@ -582,6 +589,45 @@ async def evento(req: Request):
     datos = body.get("datos") if isinstance(body.get("datos"), dict) else {}
     datos = {k: (str(v)[:300] if not isinstance(v, (int, float, bool)) else v) for k, v in list(datos.items())[:12]}
     return {"ok": registro.evento(sid, tipo, datos)}
+
+
+@app.get("/api/buscar")
+async def api_buscar(q: str = "", limite: int = 8, parcial: bool = False, categoria: str | None = None, ia: bool = False):
+    """Buscador del widget: rápido (índice propio). Con ia=1, Claude interpreta frases ("algo para el desayuno")."""
+    if ia:
+        try:
+            return await buscador.buscar_con_ia(q, client, limite)
+        except anthropic.APIError:
+            pass  # sin IA igual devolvemos lo que encuentre el índice
+    return await buscador.buscar(q, limite, parcial, categoria)
+
+
+ACCIONES_BUSCADOR = {"busqueda", "click", "agregar", "modi", "ver_todos"}
+
+
+@app.post("/api/buscar/evento")
+async def api_buscar_evento(req: Request):
+    body = await req.json()
+    accion, sid = str(body.get("accion") or ""), str(body.get("sesion") or "")
+    if accion not in ACCIONES_BUSCADOR:
+        return {"ok": False}
+    registro.busqueda(sid, accion, body.get("datos") if isinstance(body.get("datos"), dict) else {})
+    return {"ok": True}
+
+
+@app.get("/api/buscar/reporte")
+async def api_buscar_reporte(dias: int = 30):
+    return registro.resumen_busquedas(max(1, min(dias, 365)))
+
+
+@app.get("/buscador.js")
+async def buscador_js():
+    return FileResponse(ROOT / "static" / "buscador.js", media_type="application/javascript")
+
+
+@app.get("/buscador")
+async def buscador_html():
+    return FileResponse(ROOT / "static" / "buscador.html")
 
 
 @app.get("/api/reporte")

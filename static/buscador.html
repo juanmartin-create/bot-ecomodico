@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ecomodico · Buscador nuevo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root { --azul: #2274A5; --azul-osc: #1a5e8a; --ambar: #FDB916; --fondo: #FAFAFA; --borde: #E0E0E0; --texto: #222; --texto-2: #666; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: 'Outfit', system-ui, sans-serif; background: var(--fondo); color: var(--texto); line-height: 1.5; }
+  header { background: #fff; border-bottom: 1px solid var(--borde); position: sticky; top: 0; z-index: 10; }
+  .nav { max-width: 1100px; margin: 0 auto; padding: 14px 16px; display: flex; align-items: center; gap: 24px; }
+  .nav img { height: 32px; }
+  .nav input { flex: 1; max-width: 520px; margin-left: auto; border: 1px solid var(--azul); border-radius: 8px; padding: 10px 14px; font: inherit; font-size: 15px; outline: none; }
+  main { max-width: 820px; margin: 0 auto; padding: 40px 16px 80px; }
+  h1 { font-size: 30px; margin: 0 0 8px; }
+  h2 { font-size: 20px; margin: 36px 0 10px; }
+  p, li { color: var(--texto-2); }
+  .prueba { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 0; }
+  .prueba button { border: 1px solid var(--borde); background: #fff; border-radius: 20px; padding: 6px 14px; font: inherit; font-size: 14px; cursor: pointer; }
+  .prueba button:hover { border-color: var(--azul); color: var(--azul); }
+  .bm { display: inline-block; background: var(--azul); color: #fff; text-decoration: none; font-weight: 600; padding: 12px 20px; border-radius: 30px; cursor: grab; }
+  .bm:hover { background: var(--azul-osc); }
+  ol li { margin-bottom: 6px; }
+  code { background: #EBF4FB; padding: 2px 6px; border-radius: 4px; color: var(--azul); font-size: 13px; }
+  .nota { background: #fff; border: 1px solid var(--borde); border-left: 4px solid var(--ambar); border-radius: 8px; padding: 14px 16px; font-size: 14px; color: var(--texto-2); margin-top: 16px; }
+</style>
+</head>
+<body>
+<header><div class="nav">
+  <img alt="Ecomodico" src="https://d2eebw31vcx88p.cloudfront.net/ecomodico/uploads-r/configs/22d42d8543bd3e9e7b75ef68339ff01c8239ea71.png">
+  <input id="q" type="search" data-buscador-ecomodico placeholder="¿Qué estás buscando?" autocomplete="off">
+</div></header>
+<main>
+  <h1>Buscador nuevo de Ecomodico</h1>
+  <p>Escribí arriba como lo haría un cliente: con errores, sin tildes, todo junto o con una frase. Algunas para probar:</p>
+  <div class="prueba" id="ejemplos"></div>
+
+  <h2>Probarlo sobre ecomodico.com real</h2>
+  <ol>
+    <li>Arrastrá este botón a la barra de favoritos: <a class="bm" id="bm" href="#">🔍 Buscador Ecomodico</a></li>
+    <li>Entrá a <a href="https://ecomodico.com" target="_blank" rel="noopener">ecomodico.com</a> y hacé clic en el favorito.</li>
+    <li>Usá la barra de búsqueda de siempre. Si Chrome pregunta por acceso a la red local, aceptá (es este servidor, en tu compu).</li>
+  </ol>
+  <div class="nota">El favorito carga el buscador desde este servidor (<code id="origen"></code>), así que tiene que estar prendido. Solo lo ves vos: los clientes van a verlo cuando el script se pegue en la tienda con una línea:<br><br>
+    <code id="linea"></code></div>
+</main>
+<script>
+  var origen = location.origin;
+  document.getElementById("origen").textContent = origen;
+  document.getElementById("linea").textContent = '<script src="' + origen + '/buscador.js" defer><\/script>';
+  document.getElementById("bm").href = "javascript:(function(){var s=document.createElement('script');s.src='" + origen +
+    "/buscador.js?'+Date.now();document.body.appendChild(s);})();";
+  document.getElementById("bm").addEventListener("click", function (e) { e.preventDefault(); alert("Arrastralo a la barra de favoritos y usalo en ecomodico.com"); });
+  ["cocacola", "champu anticaspa", "lehce", "magensio", "tele 50", "comida de gato", "barritas proteicas", "algo para el desayuno", "cosas para un asado"].forEach(function (t) {
+    var b = document.createElement("button"); b.textContent = t;
+    b.onclick = function () { var q = document.getElementById("q"); q.value = t; q.focus(); q.dispatchEvent(new Event("input", { bubbles: true })); };
+    document.getElementById("ejemplos").appendChild(b);
+  });
+</script>
+<script src="/buscador.js" defer></script>
+<script src="/widget.js" defer></script>
+</body>
+</html>

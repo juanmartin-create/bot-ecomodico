@@ -17,6 +17,7 @@ _lock = threading.Lock()
 
 # Precio de lista por millón de tokens: (entrada, salida, lectura de caché). Escritura de caché = 1,25 × entrada.
 PRECIOS = {
+    "haiku-5-5": (0.10, 0.50, 0.01),  # mismo precio que usa CADENCE (prompts de hasta 100k tokens)
     "haiku": (1.0, 5.0, 0.10),
     "sonnet": (2.0, 10.0, 0.20),
     "opus-5-5": (4.0, 20.0, 0.20),
@@ -67,6 +68,18 @@ def iniciar() -> None:
             tipo TEXT NOT NULL,           -- chat_abierto | tarjeta_click | agregar_carrito | actualizar_carrito | checkout | compra | feedback | error
             datos TEXT                    -- JSON
         );
+        CREATE TABLE IF NOT EXISTS busquedas (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sesion TEXT,
+            ts TEXT NOT NULL,
+            accion TEXT NOT NULL,         -- busqueda | click | agregar | modi | ver_todos
+            consulta TEXT,
+            corregida TEXT,
+            via TEXT,                     -- indice | parcial | ia | ofertas
+            total INTEGER,
+            producto TEXT,
+            posicion INTEGER
+        );
         CREATE INDEX IF NOT EXISTS ix_msg_sesion ON mensajes(sesion);
         CREATE INDEX IF NOT EXISTS ix_ev_sesion ON eventos(sesion);
         CREATE UNIQUE INDEX IF NOT EXISTS ix_compra_unica ON eventos(tipo, json_extract(datos, '$.pedido')) WHERE tipo = 'compra';
@@ -78,7 +91,7 @@ def _ahora() -> str:
 
 
 def costo_llamada(modelo: str, usage) -> float:
-    clave = next((k for k in ("opus-5-5", "haiku", "sonnet", "opus", "fable") if k in (modelo or "")), "sonnet")
+    clave = next((k for k in ("opus-5-5", "haiku-5-5", "haiku", "sonnet", "opus", "fable") if k in (modelo or "")), "sonnet")
     e, s, c = PRECIOS[clave]
     return ((usage.input_tokens or 0) * e + (usage.cache_creation_input_tokens or 0) * e * 1.25
             + (usage.cache_read_input_tokens or 0) * c + (usage.output_tokens or 0) * s) / 1e6
@@ -127,6 +140,28 @@ def evento(sesion: str, tipo: str, datos: dict | None = None) -> bool:
         except sqlite3.IntegrityError:
             return False
     return True
+
+
+def busqueda(sesion: str, accion: str, d: dict) -> None:
+    """Lo que pasa en el buscador: qué se busca, qué da cero, dónde hacen clic. No toca las métricas del chat."""
+    with _lock, _con() as con:
+        con.execute("INSERT INTO busquedas (sesion, ts, accion, consulta, corregida, via, total, producto, posicion) VALUES (?,?,?,?,?,?,?,?,?)",
+                    (sesion[:64], _ahora(), accion[:20], str(d.get("consulta") or "")[:120], (d.get("corregida") or None),
+                     str(d.get("via") or "")[:20] or None, d.get("total") if isinstance(d.get("total"), int) else None,
+                     str(d.get("producto") or "")[:200] or None, d.get("posicion") if isinstance(d.get("posicion"), int) else None))
+
+
+def resumen_busquedas(dias: int = 30) -> dict:
+    with _lock, _con() as con:
+        desde = f"-{int(dias)} days"
+        q = lambda sql: [dict(r) for r in con.execute(sql, (desde,)).fetchall()]
+        return {
+            "top": q("""SELECT lower(consulta) AS consulta, count(*) AS veces, max(total) AS resultados FROM busquedas
+                       WHERE accion='busqueda' AND ts >= datetime('now', ?) GROUP BY 1 ORDER BY 2 DESC LIMIT 50"""),
+            "sin_resultados": q("""SELECT lower(consulta) AS consulta, count(*) AS veces FROM busquedas
+                       WHERE accion='busqueda' AND total=0 AND ts >= datetime('now', ?) GROUP BY 1 ORDER BY 2 DESC LIMIT 50"""),
+            "acciones": q("""SELECT accion, count(*) AS veces FROM busquedas WHERE ts >= datetime('now', ?) GROUP BY 1"""),
+        }
 
 
 def resumen(dias: int = 30) -> dict:

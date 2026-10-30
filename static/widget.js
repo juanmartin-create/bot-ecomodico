@@ -451,4 +451,7 @@
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); enviar(input.value); }
   });
   input.addEventListener("input", function () { input.style.height = ""; input.style.height = Math.min(input.scrollHeight, 100) + "px"; });
+
+  // Para que otros scripts de la tienda (ej. el buscador) le pasen una consulta a Modi.
+  window.Modi = { preguntar: async function (texto) { await abrir(); if (texto) enviar(texto); } };
 })();

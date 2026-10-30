@@ -5,3 +5,9 @@ uso.jsonl
 server.log
 server_*.log
 datos.db
+seguimiento.db
+seguimiento.log
+seguimiento/*.csv
+indice.json
+busquedas_ia.json
+.tmp/
