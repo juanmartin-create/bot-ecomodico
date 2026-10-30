@@ -592,14 +592,15 @@ async def evento(req: Request):
 
 
 @app.get("/api/buscar")
-async def api_buscar(q: str = "", limite: int = 8, parcial: bool = False, categoria: str | None = None, ia: bool = False):
+async def api_buscar(q: str = "", limite: int = 8, parcial: bool = False, categoria: str | None = None, ia: bool = False,
+                     desde: int = 0):
     """Buscador del widget: rápido (índice propio). Con ia=1, Claude interpreta frases ("algo para el desayuno")."""
     if ia:
         try:
             return await buscador.buscar_con_ia(q, client, limite)
         except anthropic.APIError:
             pass  # sin IA igual devolvemos lo que encuentre el índice
-    return await buscador.buscar(q, limite, parcial, categoria)
+    return await buscador.buscar(q, limite, parcial, categoria, desde)
 
 
 ACCIONES_BUSCADOR = {"busqueda", "click", "agregar", "modi", "ver_todos"}
@@ -623,6 +624,12 @@ async def api_buscar_reporte(dias: int = 30):
 @app.get("/buscador.js")
 async def buscador_js():
     return FileResponse(ROOT / "static" / "buscador.js", media_type="application/javascript")
+
+
+@app.get("/ecomodico.js")
+async def ecomodico_js():
+    """Una sola línea para la tienda: carga widget.js (Modi) y buscador.js."""
+    return FileResponse(ROOT / "static" / "ecomodico.js", media_type="application/javascript")
 
 
 @app.get("/buscador")

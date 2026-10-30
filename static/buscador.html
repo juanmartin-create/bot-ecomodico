@@ -44,15 +44,15 @@
     <li>Entrá a <a href="https://ecomodico.com" target="_blank" rel="noopener">ecomodico.com</a> y hacé clic en el favorito.</li>
     <li>Usá la barra de búsqueda de siempre. Si Chrome pregunta por acceso a la red local, aceptá (es este servidor, en tu compu).</li>
   </ol>
-  <div class="nota">El favorito carga el buscador desde este servidor (<code id="origen"></code>), así que tiene que estar prendido. Solo lo ves vos: los clientes van a verlo cuando el script se pegue en la tienda con una línea:<br><br>
+  <div class="nota">El favorito carga el buscador y el chat de Modi desde este servidor (<code id="origen"></code>), así que tiene que estar prendido. Solo lo ves vos: los clientes los van a ver cuando se pegue en la tienda esta única línea:<br><br>
     <code id="linea"></code></div>
 </main>
 <script>
   var origen = location.origin;
   document.getElementById("origen").textContent = origen;
-  document.getElementById("linea").textContent = '<script src="' + origen + '/buscador.js" defer><\/script>';
+  document.getElementById("linea").textContent = '<script src="' + origen + '/ecomodico.js" defer><\/script>';
   document.getElementById("bm").href = "javascript:(function(){var s=document.createElement('script');s.src='" + origen +
-    "/buscador.js?'+Date.now();document.body.appendChild(s);})();";
+    "/ecomodico.js?'+Date.now();document.body.appendChild(s);})();";
   document.getElementById("bm").addEventListener("click", function (e) { e.preventDefault(); alert("Arrastralo a la barra de favoritos y usalo en ecomodico.com"); });
   ["cocacola", "champu anticaspa", "lehce", "magensio", "tele 50", "comida de gato", "barritas proteicas", "algo para el desayuno", "cosas para un asado"].forEach(function (t) {
     var b = document.createElement("button"); b.textContent = t;

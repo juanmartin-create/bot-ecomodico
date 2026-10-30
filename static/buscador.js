@@ -203,7 +203,7 @@
     h += "</div>";
     if (estado === "ia") h += "<div class='ia'><span class='punto'></span>Buscando ideas para “" + esc(q) + "”…</div>";
     h += "<div class='pie'>" +
-      (r.via !== "ia" && r.total ? "<a class='todos' href='" + esc(urlTodos(r)) + "'>Ver todos (" + r.total + ")</a>" : "<span></span>") +
+      (r.via !== "ia" && r.total ? "<a class='todos' href='" + esc(urlTodos(r)) + "'>" + (r.todos_en ? "Ver todo en " + esc(r.todos_en) : "Ver todos (" + r.total + ")") + "</a>" : "<span></span>") +
       (window.Modi ? "<button class='modi'><img alt='' src='" + API + "/modi.png'>¿No es lo que buscás? Preguntale a Modi</button>" : "") +
       "</div>";
     panel.innerHTML = h;
@@ -320,27 +320,32 @@
   document.addEventListener("focusin", function (e) {
     if (e.target.matches && e.target.matches(SEL) && e.target.value.trim()) {
       campo = e.target;
+      // En la página de resultados de esa misma búsqueda no tapamos la grilla con el desplegable.
+      if (busquedaDeLaUrl() === campo.value.trim()) return;
       if (ultimo && ultimo.consulta === campo.value) abrir(); else buscar(campo.value);
     }
   }, true);
 
   document.addEventListener("keydown", function (e) {
-    if (!campo || e.target !== campo || !panel.classList.contains("abierto")) return;
+    if (!e.target.matches || !e.target.matches(SEL)) return;
+    campo = e.target;
+    var abierto = panel.classList.contains("abierto");
+    if (e.key === "Enter") {
+      // Siempre lo resolvemos nosotros: si no, Drubbit busca la palabra tal cual ("cocacola" -> 0 resultados).
+      e.preventDefault(); e.stopImmediatePropagation();
+      if (abierto && sel >= 0 && ultimo && ultimo.productos[sel]) {
+        registrar("click", { consulta: ultimo.consulta, producto: ultimo.productos[sel].nombre, posicion: sel });
+        location.href = ultimo.productos[sel].url;
+      } else if (campo.value.trim()) {
+        registrar("ver_todos", { consulta: campo.value.trim() });
+        irAResultados(campo.value.trim());
+      }
+      return;
+    }
+    if (!abierto) return;
     if (e.key === "ArrowDown") { e.preventDefault(); marcar(sel + 1); }
     else if (e.key === "ArrowUp") { e.preventDefault(); marcar(sel - 1); }
     else if (e.key === "Escape") { cerrar(); }
-    else if (e.key === "Enter") {
-      e.preventDefault(); e.stopImmediatePropagation();
-      if (sel >= 0 && ultimo && ultimo.productos[sel]) {
-        registrar("click", { consulta: ultimo.consulta, producto: ultimo.productos[sel].nombre, posicion: sel });
-        location.href = ultimo.productos[sel].url;
-      } else if (ultimo && ultimo.via === "ia") {
-        // Con ideas de la IA no hay una sola búsqueda para "ver todos": dejamos el panel abierto.
-      } else if (ultimo && ultimo.total) {
-        registrar("ver_todos", { consulta: ultimo.consulta, corregida: ultimo.corregida, total: ultimo.total });
-        location.href = urlTodos(ultimo);
-      }
-    }
   }, true);
 
   // Que Enter en la barra no dispare la búsqueda vieja de la tienda mientras el panel está abierto.
@@ -348,9 +353,10 @@
     if (e.key === "Enter" && campo && e.target === campo) { e.preventDefault(); e.stopImmediatePropagation(); }
   }, true);
   document.addEventListener("submit", function (e) {
-    if (campo && e.target.contains && e.target.contains(campo) && panel.classList.contains("abierto")) {
-      e.preventDefault(); e.stopImmediatePropagation();
-    }
+    var inp = e.target.querySelector && e.target.querySelector(SEL);
+    if (!inp) return;
+    e.preventDefault(); e.stopImmediatePropagation();
+    if (inp.value.trim()) irAResultados(inp.value.trim());
   }, true);
 
   document.addEventListener("mousedown", function (e) {
@@ -359,4 +365,32 @@
   }, true);
   window.addEventListener("resize", ubicar);
   window.addEventListener("scroll", ubicar, true);
+
+  // ---- Enter: a la página de la tienda, pero con la búsqueda ya corregida ----
+  // ("cocacola" -> /shop?search=coca cola; "limpieza" -> la página de la categoría)
+  function router() {
+    var app = document.getElementById("app"), vm = app && app.__vue__;
+    return vm && (vm.$router || (vm.$root && vm.$root.$router));
+  }
+  function ir(url) {
+    var r = router();
+    if (r) {
+      // Navegación de la propia tienda (sin recargar): el buscador sigue cargado.
+      try { var p = r.push(url); if (p && p.catch) p.catch(function () {}); return; } catch (e) {}
+    }
+    location.href = url;
+  }
+  async function irAResultados(q) {
+    clearTimeout(timerBusqueda); var n = ++pedido;  // que una búsqueda en curso no reabra el desplegable
+    cerrar(); if (campo) campo.blur();
+    var r = ultimo && ultimo.consulta === q ? ultimo : null;
+    if (!r) { try { r = await pedir({ q: q, limite: 8, parcial: 1 }); } catch (e) {} }
+    if (n !== pedido) return;
+    ir(r && r.total ? urlTodos(r) : "/shop?search=" + encodeURIComponent(q));
+  }
+  function busquedaDeLaUrl() {
+    if (location.pathname.replace(/\/$/, "") !== "/shop") return null;
+    var q = new URLSearchParams(location.search).get("search");
+    return q && q.trim() ? q.trim() : null;
+  }
 })();

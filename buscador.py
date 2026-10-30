@@ -12,8 +12,8 @@ con los 5.800 productos y busca como lo haría Google, pero en chico:
 4. Ordena por relevancia: pesa más el nombre que la marca, la categoría o los atributos,
    suma si la categoría coincide (busco "leche" -> primero la categoría Leches, no galletitas),
    y desempata con stock, más vendidos, orden de la tienda y descuento.
-5. Si la búsqueda es una frase ("algo para el desayuno") o no trae nada, Claude Haiku la
-   traduce a términos de catálogo. Se guarda en caché: cada frase se paga una sola vez.
+5. Opcional (BUSCADOR_IA=1, apagado por defecto): si la búsqueda es una frase ("algo para el
+   desayuno") o no trae nada, Claude Haiku la traduce a términos de catálogo. Se guarda en caché.
 
 El índice se baja de /shop (las mismas páginas que ve el cliente) y se renueva cada hora.
 """
@@ -38,6 +38,8 @@ ARCHIVO_INDICE = ROOT / "indice.json"
 ARCHIVO_IA = ROOT / "busquedas_ia.json"
 REFRESCO = 3600  # el catálogo se vuelve a bajar cada hora
 MODELO_IA = os.getenv("BUSCADOR_MODEL", "claude-haiku-5-5")
+# Apagada por defecto: el buscador no gasta tokens. Con BUSCADOR_IA=1, Claude interpreta frases y búsquedas sin resultados.
+USAR_IA = os.getenv("BUSCADOR_IA", "0") == "1"
 
 # Peso de cada campo: una palabra en el nombre vale más que en la marca, la categoría o un atributo.
 PESOS = {"nombre": 10.0, "marca": 8.0, "categoria": 7.0, "familia": 4.0, "atributo": 3.0}
@@ -441,7 +443,7 @@ def _facetas(res: list) -> list[dict]:
     return [{"nombre": k, "cantidad": v} for k, v in c.most_common(5)]
 
 
-async def buscar(q: str, limite: int = 8, parcial: bool = False, categoria: str | None = None) -> dict:
+async def buscar(q: str, limite: int = 8, parcial: bool = False, categoria: str | None = None, desde: int = 0) -> dict:
     t0 = time.perf_counter()
     await actualizar()
     q = (q or "").strip()[:120]
@@ -479,16 +481,25 @@ async def buscar(q: str, limite: int = 8, parcial: bool = False, categoria: str 
             corregida = None
     if inter["competidor"] is not None and via in ("indice", "parcial", "categoria"):
         corregida = corregida or " ".join(inter["mostrar"])
+    todos_en = None
+    if via == "indice" and res and not url_todos:
+        # "arroz", "leche", "pañales": si lo buscado es el nombre de la categoría del primer resultado, "Ver todos"
+        # va a esa categoría de la tienda. La búsqueda de Drubbit pone primero jabones Rexona para "arroz".
+        cat = res[0][1]["cat_hoja"]
+        buscado = {raiz(x) for x in normalizar(corregida or " ".join(inter["mostrar"])).split()}
+        if buscado and buscado <= res[0][1]["_cat_tokens"] and cat in _estado["urls_cat"]:
+            url_todos, todos_en = _estado["urls_cat"][cat], cat
     return {
         "consulta": q,
         "corregida": corregida,
         "titulo": titulo,
         "url_todos": url_todos or ("/shop?search=" + (corregida or " ".join(inter["mostrar"]) or q)),
+        "todos_en": todos_en,
         "total": len(res),
-        "productos": [_publico(d) for _, d in res[:max(1, min(limite, 48))]],
+        "productos": [_publico(d) for _, d in res[max(0, desde):max(0, desde) + max(1, min(limite, 48))]],
         "categorias": facetas,
         "via": via,
-        "sugerir_ia": via in ("indice", "parcial") and ((not res) or bool(FRASE_ABIERTA.search(q))),
+        "sugerir_ia": USAR_IA and via in ("indice", "parcial") and ((not res) or bool(FRASE_ABIERTA.search(q))),
         "ms": round((time.perf_counter() - t0) * 1000, 1),
     }
 
@@ -536,6 +547,8 @@ async def _terminos_ia(q: str, client) -> list[str]:
 
 
 async def buscar_con_ia(q: str, client, limite: int = 8) -> dict:
+    if not USAR_IA:
+        return await buscar(q, limite)
     t0 = time.perf_counter()
     await actualizar()
     terminos = await _terminos_ia(q, client)
