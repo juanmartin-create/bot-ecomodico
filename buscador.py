@@ -290,6 +290,8 @@ def _alternativas(t: str, ultimo: bool, idx: dict, corregir: bool = True) -> tup
         dist = 1 if len(t) < 8 else 2
         cands = process.extract(t, _estado["vocab"], scorer=DamerauLevenshtein.distance,
                                 score_cutoff=dist, limit=8)
+        # Casi nadie se equivoca en la primera letra: "lehce" -> leche sí, "helado" -> pelado no.
+        cands = [c for c in cands if c[0][0] == t[0]]
         if cands:
             mejor = min(cands, key=lambda c: (c[1], c[0][0] != t[0], -_estado["frec"][c[0]]))
             for v, d, _ in cands:
@@ -443,7 +445,19 @@ def _facetas(res: list) -> list[dict]:
     return [{"nombre": k, "cantidad": v} for k, v in c.most_common(5)]
 
 
-async def buscar(q: str, limite: int = 8, parcial: bool = False, categoria: str | None = None, desde: int = 0) -> dict:
+ORDENES = {
+    "precio_asc": lambda d: (not d["disponible"], d["precio"] or 0),
+    "precio_desc": lambda d: (not d["disponible"], -(d["precio"] or 0)),
+    "descuento": lambda d: (not d["disponible"], -(d.get("descuento_pct") or 0)),
+    "nombre": lambda d: (not d["disponible"], normalizar(d["nombre"])),
+}
+
+
+async def buscar(q: str, limite: int = 8, parcial: bool = False, categoria: str | None = None, desde: int = 0,
+                 marcas: list[str] | None = None, ofertas: bool = False, orden: str = "relevancia",
+                 completo: bool = False) -> dict:
+    """completo=True es para la página de resultados: devuelve todas las categorías y marcas con su cantidad
+    (los filtros de la columna izquierda), y acepta filtrar por marcas/ofertas y ordenar."""
     t0 = time.perf_counter()
     await actualizar()
     q = (q or "").strip()[:120]
@@ -469,15 +483,30 @@ async def buscar(q: str, limite: int = 8, parcial: bool = False, categoria: str 
             res, corr = _buscar(inter["grupos"], parcial, inter["oferta"], minimo=max(1, math.ceil(len(inter["grupos"]) / 2)))
             via = "parcial"
     facetas = _facetas(res)
+    if completo:
+        # En el orden en que aparecen (la categoría más relevante primero), no por cantidad.
+        facetas = [{"nombre": k, "cantidad": v} for k, v in Counter(d["cat_hoja"] for _, d in res if d["cat_hoja"]).items()]
     if categoria:
         res = [(s, d) for s, d in res if d["cat_hoja"] == categoria]
+    facetas_marca, n_ofertas = [], 0
+    if completo:
+        facetas_marca = [{"nombre": k, "cantidad": v} for k, v in Counter(d["marca"] for _, d in res if d["marca"]).most_common()]
+    if marcas:
+        res = [(s, d) for s, d in res if d["marca"] in marcas]
+    if completo:
+        n_ofertas = sum(1 for _, d in res if (d.get("descuento_pct") or 0) > 0)
+    if ofertas:
+        res = [(s, d) for s, d in res if (d.get("descuento_pct") or 0) > 0]
+    if orden in ORDENES:
+        res = sorted(res, key=lambda x: ORDENES[orden](x[1]))
     corregida = None
     if via in ("indice", "parcial"):
         mostrar = [corr.get(raiz(m), None) for m in inter["mostrar"]]
         corregida = " ".join(_estado["superficie"].get(c, c) if c else m for c, m in zip(mostrar, inter["mostrar"]))
         # Si cambió algo más que tildes/plurales, se lo contamos al cliente ("Mostrando resultados de shampoo").
         orig = [raiz(x) for x in normalizar(q).split() if x not in STOP and not _es_oferta(x) and not _es_generica(x)]
-        if [raiz(x) for x in normalizar(corregida).split()] == orig or not corregida:
+        # Sin resultados no hay nada que "mostrar en vez de": la corrección quedaría rara ("regalo dia pares").
+        if [raiz(x) for x in normalizar(corregida).split()] == orig or not corregida or not res:
             corregida = None
     if inter["competidor"] is not None and via in ("indice", "parcial", "categoria"):
         corregida = corregida or " ".join(inter["mostrar"])
@@ -498,6 +527,8 @@ async def buscar(q: str, limite: int = 8, parcial: bool = False, categoria: str 
         "total": len(res),
         "productos": [_publico(d) for _, d in res[max(0, desde):max(0, desde) + max(1, min(limite, 48))]],
         "categorias": facetas,
+        "marcas": facetas_marca,
+        "ofertas": n_ofertas,
         "via": via,
         "sugerir_ia": USAR_IA and via in ("indice", "parcial") and ((not res) or bool(FRASE_ABIERTA.search(q))),
         "ms": round((time.perf_counter() - t0) * 1000, 1),

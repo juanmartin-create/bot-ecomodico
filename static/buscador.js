@@ -155,10 +155,9 @@
   function cerrar() { panel.classList.remove("abierto"); sel = -1; clearTimeout(timerIA); burbuja(true); }
 
   function urlTodos(r) {
-    if (r && r.url_todos) return r.url_todos.replace(/search=(.*)$/, function (m, q) { return "search=" + encodeURIComponent(q.trim()); });
-    var q = (r && r.corregida) || (campo && campo.value) || "";
-    return "/shop?search=" + encodeURIComponent(q.trim());
+    return "/shop?search=" + encodeURIComponent(((r && r.consulta) || (campo && campo.value) || "").trim());
   }
+
 
   function render(r, estado) {
     ultimo = r;
@@ -203,7 +202,7 @@
     h += "</div>";
     if (estado === "ia") h += "<div class='ia'><span class='punto'></span>Buscando ideas para “" + esc(q) + "”…</div>";
     h += "<div class='pie'>" +
-      (r.via !== "ia" && r.total ? "<a class='todos' href='" + esc(urlTodos(r)) + "'>" + (r.todos_en ? "Ver todo en " + esc(r.todos_en) : "Ver todos (" + r.total + ")") + "</a>" : "<span></span>") +
+      (r.via !== "ia" && r.total ? "<a class='todos' href='" + esc(urlTodos(r)) + "'>Ver todos (" + r.total + ")</a>" : "<span></span>") +
       (window.Modi ? "<button class='modi'><img alt='' src='" + API + "/modi.png'>¿No es lo que buscás? Preguntale a Modi</button>" : "") +
       "</div>";
     panel.innerHTML = h;
@@ -263,8 +262,8 @@
     }
     return null;
   }
-  async function agregar(p, boton, pos) {
-    registrar("agregar", { consulta: ultimo && ultimo.consulta, producto: p.nombre, posicion: pos });
+  async function agregar(p, boton, pos, consulta) {
+    registrar("agregar", { consulta: consulta || (ultimo && ultimo.consulta), producto: p.nombre, posicion: pos });
     var shop = tiendaShop();
     if (!shop) { window.open(p.url, "_blank", "noopener"); return; }
     boton.disabled = true; boton.textContent = "…";
@@ -293,7 +292,9 @@
       registrar("modi", { consulta: ultimo.consulta, total: ultimo.total });
       cerrar(); campo.blur(); window.Modi.preguntar("Busco " + ultimo.consulta);
     } else if (t.classList.contains("todos")) {
+      e.preventDefault();
       registrar("ver_todos", { consulta: ultimo.consulta, corregida: ultimo.corregida, total: ultimo.total });
+      irAResultados(ultimo.consulta);
     } else if (t.classList.contains("fila")) {
       var i2 = +t.dataset.i;
       registrar("click", { consulta: ultimo.consulta, producto: ultimo.productos[i2].nombre, posicion: i2 });
@@ -366,8 +367,90 @@
   window.addEventListener("resize", ubicar);
   window.addEventListener("scroll", ubicar, true);
 
-  // ---- Enter: a la página de la tienda, pero con la búsqueda ya corregida ----
-  // ("cocacola" -> /shop?search=coca cola; "limpieza" -> la página de la categoría)
+  // ---- página de resultados (/shop?search=...): nuestra grilla con los filtros de la tienda ----
+  // Ofertas, Categoría, Marca, Ordenar por y páginas, todo con el mouse. El resto de la página es la de la tienda.
+  var POR_PAGINA = 24;
+  var FILA = ".container.pt-6 > .row";
+  var cssPagina = `
+  .res { display: grid; grid-template-columns: 220px 1fr; gap: 28px; padding: 8px 0 48px; color: var(--texto); }
+  .filtros { font-size: 14px; }
+  .filtros .q { font-size: 20px; font-weight: 600; word-break: break-word; }
+  .filtros .n { color: var(--texto-2); margin: 2px 0 12px; }
+  .activos { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; }
+  .activo { display: inline-flex; align-items: center; gap: 6px; background: #EEE; border: 0; border-radius: 16px; padding: 5px 10px; font-size: 13px; cursor: pointer; color: var(--texto); }
+  .activo:hover { background: #E2E2E2; }
+  .activo .x { width: 16px; height: 16px; border-radius: 50%; background: #666; color: #fff; font-size: 11px; line-height: 16px; text-align: center; }
+  .toggle-oferta { width: 100%; display: flex; justify-content: space-between; border: 0; background: var(--azul); color: #fff; font-weight: 600; font-size: 14px; border-radius: 4px; padding: 10px 10px; cursor: pointer; margin-bottom: 18px; box-shadow: 0 2px 4px rgba(0,0,0,.15); }
+  .toggle-oferta:hover { background: var(--azul-osc); }
+  .toggle-oferta.on { background: var(--azul-osc); box-shadow: inset 0 2px 4px rgba(0,0,0,.25); }
+  .toggle-oferta small { font-weight: 400; opacity: .8; font-size: 13px; }
+  .filtros h3 { font-size: 17px; font-weight: 600; margin: 8px 0 8px; }
+  .item { width: 100%; display: flex; justify-content: space-between; gap: 8px; text-align: left; border: 0; background: none; padding: 7px 4px; font-size: 13.5px; letter-spacing: .02em; color: var(--texto); cursor: pointer; border-radius: 4px; }
+  .item:hover { background: var(--azul-claro); }
+  .item.on { color: var(--azul); font-weight: 600; }
+  .item small { color: #999; font-size: 12.5px; flex-shrink: 0; }
+  .item .caja { display: inline-block; width: 14px; height: 14px; border: 1.5px solid #999; border-radius: 3px; margin-right: 8px; vertical-align: -2px; }
+  .item.on .caja { background: var(--azul); border-color: var(--azul); }
+  .vermas { border: 0; background: none; color: var(--azul); font-size: 13px; font-weight: 600; cursor: pointer; padding: 6px 4px 14px; }
+  .sep { border: 0; border-top: 1px solid #EEE; margin: 12px 0; }
+  .plegar { width: 100%; display: flex; justify-content: space-between; align-items: center; border: 0; background: none; padding: 0; cursor: pointer; color: var(--texto); }
+  .plegar h3 { margin: 8px 0; }
+  .plegar .flecha { width: 9px; height: 9px; border-right: 2px solid #666; border-bottom: 2px solid #666; transform: rotate(45deg); margin: 0 8px 4px 0; transition: transform .15s; }
+  .plegar.abierta .flecha { transform: rotate(-135deg); margin-bottom: -2px; }
+  .banners { margin-top: 18px; display: flex; flex-direction: column; gap: 16px; }
+  .banners a { display: block; border-radius: 12px; overflow: hidden; }
+  .banners img { display: block; width: 100%; height: auto; }
+  .top { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 16px; }
+  .top h1 { margin: 0; font-size: 22px; font-weight: 600; }
+  .top .cab { padding: 2px 0 0; font-size: 14px; }
+  .orden { border: 1px solid #BDBDBD; border-radius: 4px; padding: 9px 10px; font-size: 14px; background: #fff; color: var(--texto); cursor: pointer; min-width: 220px; }
+  .grilla { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 20px; }
+  .card { background: #fff; border-radius: 12px; box-shadow: 0 2px 12px rgba(0,0,0,.08); padding: 14px; display: flex; flex-direction: column; gap: 8px; text-decoration: none; color: inherit; transition: box-shadow .15s; }
+  .card:hover { box-shadow: 0 6px 20px rgba(0,0,0,.12); }
+  .card .img { height: 170px; display: flex; align-items: center; justify-content: center; }
+  .card img { max-width: 100%; max-height: 170px; object-fit: contain; }
+  .card .nom { font-size: 15px; font-weight: 500; -webkit-line-clamp: 3; min-height: 3.9em; }
+  .card .antes { display: flex; align-items: center; gap: 6px; min-height: 20px; }
+  .card .antes s { font-size: 13px; color: #999; }
+  .card .ya { font-size: 26px; font-weight: 500; color: var(--azul); line-height: 1.1; }
+  .card .gratis { min-height: 16px; }
+  .card .add { margin-top: auto; width: 100%; padding: 12px; font-size: 16px; }
+  .card .agotado { margin-top: auto; text-align: center; padding: 12px; }
+  .paginas { display: flex; justify-content: center; gap: 6px; margin-top: 32px; flex-wrap: wrap; }
+  .paginas button { min-width: 38px; height: 38px; border: 1px solid #DDD; background: #fff; border-radius: 6px; font-size: 14px; cursor: pointer; color: var(--texto); }
+  .paginas button:hover { border-color: var(--azul); color: var(--azul); }
+  .paginas button.on { background: var(--azul); border-color: var(--azul); color: #fff; }
+  .paginas button[disabled] { opacity: .4; cursor: default; }
+  .paginas span { line-height: 38px; color: #999; }
+  .vacio { padding: 30px 0; font-size: 16px; }
+  .grilla .esq { height: 340px; margin: 0; border-radius: 12px; }
+  .abrir-filtros, .cerrar-filtros, .ver-res { display: none; }
+  @media (max-width: 900px) {
+    .res { grid-template-columns: 1fr; gap: 0; }
+    .banners { display: none; }
+    .filtros { display: none; position: fixed; inset: 0; z-index: 2147483100; background: #fff; overflow-y: auto; padding: 20px 20px 90px; }
+    .res.filtrando .filtros { display: block; }
+    .abrir-filtros { display: block; width: 100%; border: 1px solid var(--azul); background: #fff; color: var(--azul); font-weight: 600; font-size: 15px; border-radius: 6px; padding: 11px; cursor: pointer; margin-bottom: 14px; }
+    .cerrar-filtros { display: block; position: absolute; top: 14px; right: 16px; border: 0; background: none; font-size: 26px; cursor: pointer; color: var(--texto); }
+    .ver-res { display: block; position: fixed; left: 16px; right: 16px; bottom: 16px; border: 0; background: var(--azul); color: #fff; font-weight: 600; font-size: 16px; border-radius: 24px; padding: 14px; cursor: pointer; }
+    .top { flex-direction: column; gap: 10px; }
+    .orden { width: 100%; }
+    .grilla { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+    .card { padding: 10px; } .card .img { height: 130px; } .card img { max-height: 130px; }
+    .card .nom { font-size: 13px; } .card .ya { font-size: 20px; } .card .add { font-size: 14px; padding: 10px; }
+    .top h1 { font-size: 20px; }
+  }`;
+  global.textContent += "html.eco-res " + FILA + " > :not(#ecomodico-resultados){display:none!important}" +
+    "html.eco-res .shop-sort-select{display:none!important}";
+  var resHost = document.createElement("div");
+  resHost.id = "ecomodico-resultados";
+  resHost.style.cssText = "flex:0 0 100%;max-width:100%;padding:0 12px;box-sizing:border-box";
+  var resRoot = resHost.attachShadow({ mode: "open" });
+  resRoot.innerHTML = "<style>" + css + cssPagina + "</style><div class='res'></div>";
+  var res = resRoot.querySelector(".res");
+  var pag = null;  // { q, categoria, marcas, ofertas, orden, pagina, r, verCats, verMarcas, filtrando }
+  var pedidoPagina = 0;
+
   function router() {
     var app = document.getElementById("app"), vm = app && app.__vue__;
     return vm && (vm.$router || (vm.$root && vm.$root.$router));
@@ -380,17 +463,186 @@
     }
     location.href = url;
   }
-  async function irAResultados(q) {
-    clearTimeout(timerBusqueda); var n = ++pedido;  // que una búsqueda en curso no reabra el desplegable
+  function irAResultados(q) {
+    clearTimeout(timerBusqueda); pedido++;  // que una búsqueda en curso no reabra el desplegable
     cerrar(); if (campo) campo.blur();
-    var r = ultimo && ultimo.consulta === q ? ultimo : null;
-    if (!r) { try { r = await pedir({ q: q, limite: 8, parcial: 1 }); } catch (e) {} }
-    if (n !== pedido) return;
-    ir(r && r.total ? urlTodos(r) : "/shop?search=" + encodeURIComponent(q));
+    ir("/shop?search=" + encodeURIComponent(q));
   }
   function busquedaDeLaUrl() {
     if (location.pathname.replace(/\/$/, "") !== "/shop") return null;
     var q = new URLSearchParams(location.search).get("search");
     return q && q.trim() ? q.trim() : null;
   }
+
+  function bannersDeLaTienda() {
+    var col = document.querySelector(FILA + " > .col-md-2");
+    if (!col) return [];
+    return [].slice.call(col.querySelectorAll("img")).map(function (i) {
+      var a = i.closest("a"); return { img: i.currentSrc || i.src, href: a ? a.href : "" };
+    }).filter(function (b) { return b.img && b.href; });
+  }
+
+  function tarjeta(p, i) {
+    var antes = p.precio_anterior ? "<s>" + pesos(p.precio_anterior) + "</s>" + (p.descuento_pct ? "<span class='off'>" + p.descuento_pct + "% OFF</span>" : "") : "";
+    return "<a class='card' href='" + esc(p.url) + "' data-i='" + i + "'>" +
+      "<div class='img'>" + (p.imagen ? "<img loading='lazy' alt='' src='" + esc(p.imagen) + "'>" : "") + "</div>" +
+      "<div class='nom'>" + esc(p.nombre) + "</div>" +
+      "<div class='antes'>" + antes + "</div>" +
+      "<div class='ya'>" + pesos(p.precio) + "</div>" +
+      "<div class='gratis'>" + (p.envio_gratis ? "Envío gratis" : "") + "</div>" +
+      (p.disponible ? "<button class='add' data-i='" + i + "'>Agregar</button>" : "<span class='agotado'>Sin stock</span>") + "</a>";
+  }
+
+  function lista(items, tipo, activos, todos) {
+    var max = todos ? items.length : 8, h = "";
+    items.slice(0, max).forEach(function (c) {
+      var on = activos(c.nombre);
+      h += "<button class='item" + (on ? " on" : "") + "' data-" + tipo + "='" + esc(c.nombre) + "'><span>" +
+        (tipo === "marca" ? "<span class='caja'></span>" : "") + esc(c.nombre) + "</span><small>(" + c.cantidad + ")</small></button>";
+    });
+    if (items.length > 8) h += "<button class='vermas' data-vermas='" + tipo + "'>" + (todos ? "Ver menos" : "Ver más (" + (items.length - 8) + ")") + "</button>";
+    return h;
+  }
+
+  function paginas(total) {
+    var n = Math.ceil(total / POR_PAGINA), a = pag.pagina, h = "";
+    if (n <= 1) return "";
+    var ver = [1, n, a - 1, a, a + 1].filter(function (x, i, l) { return x >= 1 && x <= n && l.indexOf(x) === i; }).sort(function (x, y) { return x - y; });
+    h += "<button data-pag='" + (a - 1) + "'" + (a === 1 ? " disabled" : "") + ">‹</button>";
+    ver.forEach(function (x, i) {
+      if (i && x - ver[i - 1] > 1) h += "<span>…</span>";
+      h += "<button data-pag='" + x + "'" + (x === a ? " class='on'" : "") + ">" + x + "</button>";
+    });
+    h += "<button data-pag='" + (a + 1) + "'" + (a === n ? " disabled" : "") + ">›</button>";
+    return "<nav class='paginas'>" + h + "</nav>";
+  }
+
+  function pintarPagina() {
+    var r = pag.r, q = pag.q, h = "";
+    // columna de filtros (como la de la tienda)
+    h += "<aside class='filtros'><button class='cerrar-filtros' aria-label='Cerrar'>×</button>";
+    h += "<div class='q'>" + esc(q) + "</div><div class='n'>" + (r ? r.total + " resultado/s" : "Buscando…") + "</div>";
+    h += "<div class='activos'><button class='activo' data-quitar='busqueda'>Búsqueda: " + esc(q) + " <span class='x'>×</span></button>";
+    if (pag.categoria) h += "<button class='activo' data-quitar='categoria'>" + esc(pag.categoria) + " <span class='x'>×</span></button>";
+    pag.marcas.forEach(function (m) { h += "<button class='activo' data-quitar-marca='" + esc(m) + "'>" + esc(m) + " <span class='x'>×</span></button>"; });
+    if (pag.ofertas) h += "<button class='activo' data-quitar='ofertas'>Ofertas <span class='x'>×</span></button>";
+    h += "</div>";
+    if (r) {
+      h += "<button class='toggle-oferta" + (pag.ofertas ? " on" : "") + "'>Ofertas <small>(" + r.ofertas + ")</small></button>";
+      if (r.categorias.length) h += "<h3>Categoría</h3>" + lista(r.categorias, "cat", function (n) { return pag.categoria === n; }, pag.verCats);
+      if (r.marcas.length) {
+        var abierta = pag.marcaAbierta || pag.marcas.length;
+        h += "<button class='plegar" + (abierta ? " abierta" : "") + "'><h3>Marca</h3><span class='flecha'></span></button>" +
+          (abierta ? lista(r.marcas, "marca", function (n) { return pag.marcas.indexOf(n) >= 0; }, pag.verMarcas) : "") + "<hr class='sep'>";
+      }
+    }
+    var bs = bannersDeLaTienda();
+    pag.nBanners = bs.length;
+    if (bs.length) h += "<div class='banners'>" + bs.map(function (b) { return "<a href='" + esc(b.href) + "' class='banner'><img alt='' src='" + esc(b.img) + "'></a>"; }).join("") + "</div>";
+    h += "<button class='ver-res'>Ver " + (r ? r.total + " " : "") + "resultados</button></aside>";
+    // resultados
+    h += "<main><button class='abrir-filtros'>Filtrar</button><div class='top'><div>";
+    if (r && r.titulo) h += "<h1>" + esc(r.titulo) + "</h1>";
+    else if (r && r.corregida) h += "<h1>“" + esc(r.corregida) + "”</h1><div class='cab'>Mostrando resultados de <b class='corr'>“" + esc(r.corregida) + "”</b> en vez de “" + esc(q) + "”</div>";
+    else h += "<h1>“" + esc(q) + "”</h1>";
+    h += "</div><select class='orden' aria-label='Ordenar por'>" +
+      [["relevancia", "Más relevantes"], ["precio_asc", "Menor precio"], ["precio_desc", "Mayor precio"], ["descuento", "Mayor descuento"], ["nombre", "Nombre A-Z"]]
+        .map(function (o) { return "<option value='" + o[0] + "'" + (pag.orden === o[0] ? " selected" : "") + ">Ordenar por: " + o[1] + "</option>"; }).join("") +
+      "</select></div>";
+    if (!r) h += "<div class='grilla'>" + "<div class='esq'></div>".repeat(8) + "</div>";
+    else if (!r.productos.length) {
+      h += "<div class='vacio'>No encontramos “" + esc(q) + "”" + (pag.categoria || pag.marcas.length || pag.ofertas ? " con esos filtros" : "") + ". Probá con otra palabra" +
+        (window.Modi ? " o <button class='activo modi'>preguntale a Modi</button>" : ".") + "</div>";
+    } else {
+      h += "<div class='grilla'>" + r.productos.map(tarjeta).join("") + "</div>" + paginas(r.total);
+    }
+    h += "</main>";
+    res.innerHTML = h;
+    res.classList.toggle("filtrando", !!pag.filtrando);
+  }
+
+  async function cargarPagina() {
+    var n = ++pedidoPagina;
+    pag.r = pag.r && pag.r.consulta === pag.q ? pag.r : null;
+    pintarPagina();
+    var params = { q: pag.q, limite: POR_PAGINA, desde: (pag.pagina - 1) * POR_PAGINA, completo: 1, orden: pag.orden };
+    if (pag.categoria) params.categoria = pag.categoria;
+    if (pag.marcas.length) params.marca = pag.marcas.join("|");
+    if (pag.ofertas) params.ofertas = 1;
+    var r;
+    try { r = await pedir(params); } catch (e) { return; }
+    if (n !== pedidoPagina) return;
+    pag.r = r;
+    registrar("busqueda", { consulta: pag.q, corregida: r.corregida, via: r.via, total: r.total });
+    pintarPagina();
+  }
+  function cambiar(f) {  // aplica un cambio de filtro y vuelve a la página 1
+    f(); pag.pagina = 1; cargarPagina();
+    var top = resHost.getBoundingClientRect().top + window.scrollY - 140;
+    if (window.scrollY > top) window.scrollTo({ top: top, behavior: "smooth" });
+  }
+
+  res.addEventListener("change", function (e) {
+    if (e.target.classList.contains("orden")) { var v = e.target.value; cambiar(function () { pag.orden = v; }); }
+  });
+  res.addEventListener("click", function (e) {
+    var t = e.target.closest("button, a");
+    if (!t || !pag) return;
+    var d = t.dataset;
+    if (t.classList.contains("add")) {
+      e.preventDefault(); e.stopPropagation();
+      var i = +d.i; agregar(pag.r.productos[i], t, (pag.pagina - 1) * POR_PAGINA + i, pag.q);
+    } else if (t.classList.contains("card")) {
+      registrar("click", { consulta: pag.q, producto: pag.r.productos[+d.i].nombre, posicion: (pag.pagina - 1) * POR_PAGINA + +d.i });
+    } else if (d.cat !== undefined) {
+      cambiar(function () { pag.categoria = pag.categoria === d.cat ? null : d.cat; pag.marcas = []; });
+    } else if (d.marca !== undefined) {
+      cambiar(function () { var k = pag.marcas.indexOf(d.marca); if (k >= 0) pag.marcas.splice(k, 1); else pag.marcas.push(d.marca); });
+    } else if (t.classList.contains("plegar")) {
+      pag.marcaAbierta = !(pag.marcaAbierta || pag.marcas.length); pintarPagina();
+    } else if (t.classList.contains("banner")) {
+      var u = new URL(t.href);
+      if (u.origin === location.origin) { e.preventDefault(); ir(u.pathname + u.search); }
+    } else if (t.classList.contains("toggle-oferta")) {
+      cambiar(function () { pag.ofertas = !pag.ofertas; });
+    } else if (d.quitar === "busqueda") {
+      ir("/shop");
+    } else if (d.quitar) {
+      cambiar(function () { if (d.quitar === "categoria") { pag.categoria = null; pag.marcas = []; } else pag.ofertas = false; });
+    } else if (d.quitarMarca !== undefined) {
+      cambiar(function () { pag.marcas = pag.marcas.filter(function (m) { return m !== d.quitarMarca; }); });
+    } else if (d.vermas) {
+      if (d.vermas === "cat") pag.verCats = !pag.verCats; else pag.verMarcas = !pag.verMarcas;
+      pintarPagina();
+    } else if (d.pag) {
+      pag.pagina = +d.pag; cargarPagina();
+      window.scrollTo({ top: Math.max(0, resHost.getBoundingClientRect().top + window.scrollY - 140), behavior: "smooth" });
+    } else if (t.classList.contains("abrir-filtros")) {
+      pag.filtrando = true; res.classList.add("filtrando"); burbuja(false);
+    } else if (t.classList.contains("cerrar-filtros") || t.classList.contains("ver-res")) {
+      pag.filtrando = false; res.classList.remove("filtrando"); burbuja(true);
+    } else if (t.classList.contains("modi")) {
+      registrar("modi", { consulta: pag.q, total: 0 });
+      window.Modi.preguntar("Busco " + pag.q);
+    }
+  });
+
+  // La tienda es una SPA (Vue): miramos la URL y volvemos a poner la grilla si Vue la re-dibuja.
+  var urlVista = null;
+  function revisarPagina() {
+    var q = busquedaDeLaUrl();
+    document.documentElement.classList.toggle("eco-res", !!q);
+    if (!q) { if (resHost.isConnected) resHost.remove(); urlVista = null; return; }
+    var fila = document.querySelector(FILA);
+    if (fila && resHost.parentElement !== fila) fila.insertBefore(resHost, fila.firstChild);
+    if (pag && pag.r && bannersDeLaTienda().length !== pag.nBanners) pintarPagina();
+    if (location.href !== urlVista) {
+      urlVista = location.href;
+      pag = { q: q, categoria: null, marcas: [], ofertas: false, orden: "relevancia", pagina: 1, r: null };
+      cargarPagina();
+      window.scrollTo(0, 0);
+    }
+  }
+  setInterval(revisarPagina, 250);
+  revisarPagina();
 })();

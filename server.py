@@ -593,14 +593,15 @@ async def evento(req: Request):
 
 @app.get("/api/buscar")
 async def api_buscar(q: str = "", limite: int = 8, parcial: bool = False, categoria: str | None = None, ia: bool = False,
-                     desde: int = 0):
+                     desde: int = 0, marca: str = "", ofertas: bool = False, orden: str = "relevancia", completo: bool = False):
     """Buscador del widget: rápido (índice propio). Con ia=1, Claude interpreta frases ("algo para el desayuno")."""
     if ia:
         try:
             return await buscador.buscar_con_ia(q, client, limite)
         except anthropic.APIError:
             pass  # sin IA igual devolvemos lo que encuentre el índice
-    return await buscador.buscar(q, limite, parcial, categoria, desde)
+    marcas = [m for m in marca.split("|") if m] or None  # "|" porque hay marcas con coma
+    return await buscador.buscar(q, limite, parcial, categoria, desde, marcas, ofertas, orden, completo)
 
 
 ACCIONES_BUSCADOR = {"busqueda", "click", "agregar", "modi", "ver_todos"}
