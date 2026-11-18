@@ -11,3 +11,5 @@ seguimiento/*.csv
 indice.json
 busquedas_ia.json
 .tmp/
+localhost.pem
+localhost-key.pem

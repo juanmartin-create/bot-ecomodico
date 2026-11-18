@@ -36,7 +36,8 @@ MAX_MESSAGES = 60
 
 client = anthropic.AsyncAnthropic()
 app = FastAPI(title="Ecomodico Bot")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
+                   allow_private_network=True)  # Chrome pregunta esto antes de dejar que una página https cargue algo de localhost
 
 registro.iniciar()
 
@@ -678,4 +679,7 @@ async def demo():
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="127.0.0.1", port=int(os.getenv("PORT", "8787")))
+    # Safari no deja que una página https cargue scripts por http://localhost: con certificados (mkcert) se sirve por https.
+    cert, key = ROOT / "localhost.pem", ROOT / "localhost-key.pem"
+    https = {"ssl_certfile": str(cert), "ssl_keyfile": str(key)} if cert.exists() and key.exists() else {}
+    uvicorn.run(app, host="127.0.0.1", port=int(os.getenv("PORT", "8787")), **https)
