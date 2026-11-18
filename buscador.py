@@ -289,7 +289,8 @@ def _alternativas(t: str, ultimo: bool, idx: dict, corregir: bool = True) -> tup
     alts: dict[str, float] = {}
     if t in idx:
         alts[t] = 1.0
-    if ultimo and len(t) >= 2:
+    # Si la palabra ya existe con varios productos ("sal"), no la completamos: si no, "sal" trae salsa, saladix, salmón...
+    if ultimo and len(t) >= 2 and len(idx.get(t, ())) < 5:
         # Mientras se escribe: "lec" ya sugiere "leche". Las más frecuentes primero.
         pref = [v for v in _estado["vocab"] if v.startswith(t) and v != t]
         for v in sorted(pref, key=lambda v: -_estado["frec"][v])[:25]:
