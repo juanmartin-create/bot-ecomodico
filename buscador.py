@@ -138,6 +138,10 @@ ATRIBUTOS_UTILES = re.compile(r"sabor|tipo|formato del|variedad|suplemento|aroma
 _estado = {"productos": [], "por_id": {}, "indice": {}, "familias": {}, "urls_cat": {}, "vocab": [], "frec": Counter(), "superficie": {},
            "actualizado": 0.0, "cargando": None}
 _cache_ia: dict[str, list[str]] = {}
+# Respuestas ya calculadas: en un pico todos buscan lo mismo ("leche", "coca"), así se calcula una sola vez.
+CACHE_RESULTADOS = 900  # 15 minutos
+CACHE_MAX = 20000  # tope de búsquedas distintas en memoria; al llegar se vacía
+_cache_res: dict[tuple, tuple[float, dict]] = {}
 
 
 # ---------- texto ----------
@@ -241,6 +245,7 @@ def _armar(docs: list[dict]) -> None:
                    vocab=list(indice), frec=frec,
                    superficie={t: c.most_common(1)[0][0] for t, c in superficie.items()},
                    actualizado=time.time())
+    _cache_res.clear()  # con precios y stock nuevos, las respuestas guardadas ya no sirven
 
 
 async def actualizar(forzar: bool = False) -> int:
@@ -461,9 +466,24 @@ async def buscar(q: str, limite: int = 8, parcial: bool = False, categoria: str 
                  marcas: list[str] | None = None, ofertas: bool = False, orden: str = "relevancia",
                  completo: bool = False) -> dict:
     """completo=True es para la página de resultados: devuelve todas las categorías y marcas con su cantidad
-    (los filtros de la columna izquierda), y acepta filtrar por marcas/ofertas y ordenar."""
+    (los filtros de la columna izquierda), y acepta filtrar por marcas/ofertas y ordenar.
+    La misma búsqueda se contesta de memoria por CACHE_RESULTADOS segundos (se vacía al rearmar el índice)."""
     t0 = time.perf_counter()
     await actualizar()
+    clave = (q, limite, parcial, categoria, desde, tuple(marcas or ()), ofertas, orden, completo)
+    hit = _cache_res.get(clave)
+    if hit and time.time() - hit[0] < CACHE_RESULTADOS:
+        return {**hit[1], "ms": round((time.perf_counter() - t0) * 1000, 1), "cache": True}
+    r = _resolver(q, limite, parcial, categoria, desde, marcas, ofertas, orden, completo)
+    if len(_cache_res) >= CACHE_MAX:
+        _cache_res.clear()
+    _cache_res[clave] = (time.time(), r)
+    return {**r, "ms": round((time.perf_counter() - t0) * 1000, 1)}
+
+
+def _resolver(q: str, limite: int, parcial: bool, categoria: str | None, desde: int,
+              marcas: list[str] | None, ofertas: bool, orden: str, completo: bool) -> dict:
+    t0 = time.perf_counter()
     q = (q or "").strip()[:120]
     inter = interpretar(q)
     titulo = url_todos = None

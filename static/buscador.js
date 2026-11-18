@@ -116,7 +116,8 @@
   var sel = -1;              // fila elegida con el teclado
   var pedido = 0;            // para descartar respuestas viejas
   var timerBusqueda = null, timerIA = null, timerRegistro = null;
-  var cache = {};
+  var cache = {};            // respuestas ya pedidas, por 15 minutos (igual que el server)
+  var CACHE_MS = 15 * 60 * 1000;
 
   function pesos(n) { return "$" + Math.round(n).toLocaleString("es-AR"); }
   function pesos2(n) { return "$" + n.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
@@ -215,10 +216,11 @@
 
   async function pedir(params) {
     var clave = JSON.stringify(params);
-    if (cache[clave]) return cache[clave];
+    var hit = cache[clave];
+    if (hit && Date.now() - hit.t < CACHE_MS) return hit.r;
     var u = API + "/api/buscar?" + Object.keys(params).map(function (k) { return k + "=" + encodeURIComponent(params[k]); }).join("&");
     var r = await (await fetch(u)).json();
-    cache[clave] = r;
+    cache[clave] = { t: Date.now(), r: r };
     return r;
   }
 
